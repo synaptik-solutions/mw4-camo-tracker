@@ -15,7 +15,10 @@ CAMO_RE = re.compile(r"\b([A-Z][A-Z0-9' .\-]{2,30})\s+CAMO\b", re.I)
 
 
 def emit(payload):
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    # Keep the stdout JSON stream ASCII-only so Windows' legacy console/code-page
+    # encoding can never crash on OCR text containing Unicode characters.
+    # JSON.parse in Electron restores the original Unicode text automatically.
+    print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def utc_now():
