@@ -1,224 +1,76 @@
 const CLASS_COMPLETIONIST = {
-  'Assault Rifles': { platinum: 'Get 50 headshot kills against Players', harmonic: 'Get 25 Double Kills against Players' },
-  'SMGs': { platinum: 'Get 25 kills from behind against Players', harmonic: 'Get 50 hipfire kills against Players' },
-  'Shotguns': { platinum: 'Get 125 hipfire kills against Players', harmonic: 'Get 2 kills without reloading 25 times against Players' },
-  'LMGs': { platinum: 'Get 3 kills without dying 15 times against Players', harmonic: 'Get 2 kills without releasing the trigger 25 times against Players' },
-  'Marksman Rifles': { platinum: 'Get 75 kills while prone against Players', harmonic: 'Get 75 one-shot kills against Players' },
-  'Sniper Rifles': { platinum: 'Get 75 kills while prone against Players', harmonic: 'Get 75 one-shot kills against Players' },
-  'Pistols': { platinum: 'Get 20 kills from behind against Players', harmonic: 'Get 40 hipfire kills against Players' },
-  'Launchers': { platinum: 'Get 2 kills without taking damage 15 times against Players', harmonic: 'Get 10 kills in a match 7 times against Players' },
-  'Melee': { platinum: 'Get 3 kills without dying 15 times against Players', harmonic: 'Get 25 kills from behind against Players' }
+  'Assault Rifles': { platinum: 'Get 50 Headshots against Players', harmonic: 'Get 25 Double Kills against Players' },
+  'SMGs': { platinum: 'Get 25 Player Kills from Behind', harmonic: 'Get 50 Hipfire Kills against Players' },
+  'Shotguns': { platinum: 'Get 125 Hipfire Kills against Players', harmonic: 'Get 2 Kills without Reloading 25 times against Players' },
+  'LMGs': { platinum: 'Get 3 Player Kills without dying 15 times', harmonic: 'Get 2 Player Kills without releasing the trigger 25 times' },
+  'Marksman Rifles': { platinum: 'Get 75 Player Kills while Prone', harmonic: 'Get 75 One Shot Kills against Players' },
+  'Sniper Rifles': { platinum: 'Get 75 Player Kills while Prone', harmonic: 'Get 75 One Shot Kills against Players' },
+  'Pistols': { platinum: 'Get 20 Player Kills from Behind', harmonic: 'Get 40 Hipfire Kills against Players' },
+  'Launchers': { platinum: 'Get 2 Player Kills without taking damage 15 times', harmonic: 'Get 10 Kills in a match 7 times' },
+  'Melee': { platinum: 'Get 3 Player Kills without dying 15 times', harmonic: 'Get 25 Player Kills from Behind' }
 };
 
 const pending = 'Verify exact Multiplayer requirement in-game';
-
+const sp = (name, requirement, dmz) => ({ name, requirement, dmz });
 const weapon = (name, category, militaryLevels, specials, aliases = []) => ({
   name, category, militaryLevels, specials, aliases,
   completionist: [
-    { name: 'Gold', requirement: 'Complete all 8 Military and all 3 Special camos, then get 15 Player kills in a single match' },
+    { name: 'Gold', requirement: 'Complete all 8 Military and all 3 Special camos, then get 15 Player Kills in a single match' },
     { name: 'Platinum', requirement: CLASS_COMPLETIONIST[category].platinum },
-    { name: 'Harmonic Break', requirement: CLASS_COMPLETIONIST[category].harmonic },
-    { name: 'Divergence', requirement: 'Complete Harmonic Break on 33 weapons' }
+    { name: 'Harmonic Break', requirement: CLASS_COMPLETIONIST[category].harmonic }
   ]
 });
 
 const weapons = [
-  weapon('Axion','Assault Rifles',[10,19,26,34,41,48,55,62],[
-    {name:'Splinter Rock', requirement:'Get 20 longshot kills against Players', dmz:'Get 75 longshot kills'},
-    {name:'Sunset Tropic', requirement:'Get 25 kills using the Miri 40MM grenade launcher against Players', dmz:'Get 75 kills using the Miri 40MM grenade launcher'},
-    {name:'Cyan', requirement:'Get 2 kills without reloading 25 times against Players', dmz:'Get 2 kills without reloading 50 times'}
-  ]),
-  weapon('Han 86','Assault Rifles',[10,18,25,34,42,50,57,65],[
-    {name:'Smoke', requirement:'Get 20 kills while Mounted against Players', dmz:'Get 75 kills while Mounted', official:true},
-    {name:'Stormwave', requirement:'Get 50 kills using a Suppressor against Players', dmz:'Get 125 kills using a Suppressor', official:true},
-    {name:'Red', requirement:'Get 3 kills without dying against Players', dmz:'Get 3 kills without taking damage 50 times', official:true}
-  ],['HAN 86']),
-  weapon('M4','Assault Rifles',[10,18,26,35,39,44,51,59],[
-    {name:'Myriad', requirement:'Get 20 point blank kills against Players', dmz:'Get 75 point blank kills'},
-    {name:'Night Ops', requirement:'Get 20 kills while Mounted against Players', dmz:'Get 75 kills while Mounted'},
-    {name:'Green', requirement:'Get 25 kills from behind against Players', dmz:'Get 100 kills from behind'}
-  ]),
-  weapon('Hyeon Burst','Assault Rifles',[10,17,26,32,40,49,55,62],[
-    {name:'Ponderosa', requirement:'Get 2 kills without reloading 10 times against Players', dmz:'Get 2 kills without reloading 30 times'},
-    {name:'Red Rain', requirement:'Get 20 longshot kills against Players', dmz:'Get 75 longshot kills'},
-    {name:'Kitty Kaos', requirement:'Get 100 kills while using Full Auto against Players', dmz:'Get 250 kills using a Suppressor'}
-  ]),
-  weapon('Kastov 762','Assault Rifles',[10,19,27,37,45,54,61,67],[
-    {name:'Raster Aux', requirement:pending, dmz:'Get 75 longshot kills'},
-    {name:'Samnim', requirement:pending, dmz:'Get 5 kills without taking damage 25 times'},
-    {name:'Yellow', requirement:pending, dmz:'Get 100 hipfire kills'}
-  ]),
-  weapon('Patriot XMR','Assault Rifles',[11,20,28,36,43,52,59,66],[
-    {name:'Dune Sea', requirement:pending, dmz:'Get 75 hipfire kills'},
-    {name:'Scorch', requirement:pending, dmz:'Get 125 kills using a Suppressor'},
-    {name:'Disperse', requirement:'Get 30 longshot kills against Players', dmz:'Get 100 longshot kills'}
-  ]),
-  weapon('Oden','Assault Rifles',[12,21,25,33,39,46,53,59],[
-    {name:'Dark Moss', requirement:'Get 25 kills using the Miri 40MM grenade launcher against Players', dmz:'Get 75 kills using the Miri 40MM grenade launcher'},
-    {name:'Shale', requirement:'Get 2 kills without reloading 10 times against Players', dmz:'Get 2 kills without reloading 30 times'},
-    {name:'Hot Rod', requirement:'Get 100 ADS kills against Players', dmz:'Get 250 ADS kills'}
-  ]),
-  weapon('Cronen Squall','Assault Rifles',[10,17,24,31,39,45,54,60],[
-    {name:'Oni', requirement:'Get 20 point blank kills against Players', dmz:'Get 75 point blank kills'},
-    {name:'Urban Smoke', requirement:'Get 20 kills while Mounted against Players', dmz:'Get 75 kills while Mounted'},
-    {name:'Optical Reverb', requirement:'Get 3 kills without dying 15 times against Players', dmz:'Get 50 ADS kills'}
-  ]),
-
-  weapon('Wz. 55 Striga','SMGs',[12,18,23,29,36,41,47,54],[
-    {name:'Stellation', requirement:'Get 50 kills using a Suppressor against Players', dmz:'Get 125 kills using a Suppressor'},
-    {name:'Rattlesnake', requirement:'Get 20 kills while jumping against Players', dmz:'Get 50 kills while jumping'},
-    {name:'Dark Tan', requirement:'Get 40 point blank kills against Players', dmz:'Get 100 point blank kills'}
-  ],['WZ. 55 STRIGA','WZ 55 STRIGA']),
-  weapon('ISO Nightshade','SMGs',[12,19,25,31,38,44,50,57],[
-    {name:'Asphalt', requirement:'Get 50 ADS kills against Players', dmz:'Get 125 ADS kills'},
-    {name:'Black Topo', requirement:'Get 10 Double Kills against Players', dmz:'Get 30 Double Kills'},
-    {name:'Brown', requirement:'Get 3 kills without dying 15 times against Players', dmz:'Get 3 kills without taking damage 50 times'}
-  ]),
-  weapon('PPSH-41','SMGs',[11,17,23,31,38,44,51,57],[
-    {name:'Blackwell', requirement:'Get 30 Double Kills against Players', dmz:'Get 30 Double Kills'},
-    {name:'Currents', requirement:pending, dmz:'Get 250 ADS kills'},
-    {name:'Iron', requirement:pending, dmz:'Get 75 longshot kills'}
-  ],['PPSH 41']),
-  weapon('X-58 NYX','SMGs',[9,15,20,25,29,35,42,47],[
-    {name:'Sniper Veil', requirement:'Get 20 kills while moving against Players', dmz:'Get 75 kills while moving'},
-    {name:'Carbonated', requirement:'Get 20 longshot kills against Players', dmz:'Get 75 longshot kills'},
-    {name:'Lime', requirement:'Get 40 headshot kills against Players', dmz:'Get 100 longshot kills'}
-  ],['X58 NYX']),
-  weapon('VEL 46','SMGs',[9,15,22,28,33,40,47,54],[
-    {name:'Ghast', requirement:pending, dmz:'Get 100 kills while prone'},
-    {name:'Gunmetal', requirement:pending, dmz:'Get 75 headshot kills'},
-    {name:'Jungle Shadow', requirement:pending, dmz:'Get 125 ADS kills'}
-  ]),
-
-  weapon('REZI 12','Shotguns',[11,18,26,30,38,42,47,54],[
-    {name:'Struck Oil', requirement:'Get 20 point blank kills against Players', dmz:'Get 75 point blank kills'},
-    {name:'Brushstroke', requirement:'Get 10 longshot kills against Players', dmz:'Get 50 longshot kills'},
-    {name:'White Pine', requirement:'Get 40 kills while jumping against Players', dmz:'Get 100 kills while jumping'}
-  ]),
-  weapon('Warlord','Shotguns',[13,null,null,null,null,null,null,null],[
-    {name:'Redshift', requirement:'Get 20 kills while moving against Players', dmz:'Get 75 kills while moving'},
-    {name:'Corrupted Clay', requirement:'Get 10 Double Kills against Players', dmz:'Get 30 Double Kills'},
-    {name:'Magma Ire', requirement:'Get 50 kills while prone against Players', dmz:'Get 125 kills while prone'}
-  ]),
-
-  weapon('FiNN LMG','LMGs',[12,18,24,31,37,42,48,53],[
-    {name:'Desert Tactics', requirement:'Get 20 point blank kills against Players', dmz:'Get 75 point blank kills'},
-    {name:'Green Tiger', requirement:'Get 2 kills without reloading 10 times against Players', dmz:'Get 2 kills without reloading 30 times'},
-    {name:'Thunderhead', requirement:'Get 30 longshot kills against Players', dmz:'Get 100 longshot kills'}
-  ],['FINN LMG','FINN']),
-  weapon('Type 73','LMGs',[12,19,26,34,41,48,55,61],[
-    {name:'Ash Pine', requirement:pending, dmz:'Get 75 kills while Mounted'},
-    {name:'Foxtrail', requirement:pending, dmz:'Get 100 headshot kills'},
-    {name:'Outcrop', requirement:pending, dmz:'Get 30 Double Kills'}
-  ]),
-  weapon('APOC-338','LMGs',[9,15,22,26,33,40,44,51],[
-    {name:'Mineral', requirement:'Get 20 longshot kills against Players', dmz:'Get 75 longshot kills'},
-    {name:'Phantom Flux', requirement:'Get 20 hipfire kills against Players', dmz:'Get 75 hipfire kills'},
-    {name:'Tiger Swipe', requirement:'Get 100 kills while prone against Players', dmz:'Get 250 kills while prone'}
-  ],['APOC 338']),
-
-  weapon('MAR-9','Marksman Rifles',[10,19,29,38,45,52,58,69],[
-    {name:'Mangrove', requirement:'Get 20 kills while Mounted against Players', dmz:'Get 75 kills while Mounted'},
-    {name:'Fungal Grid', requirement:'Get 25 kills while crouched against Players', dmz:'Get 75 kills while crouched'},
-    {name:'White', requirement:'Get 30 longshot kills against Players', dmz:'Get 100 longshot kills'}
-  ],['MAR 9']),
-  weapon('Oris 8.6','Marksman Rifles',[11,18,27,33,42,49,55,61],[
-    {name:'Deep Space', requirement:pending, dmz:'Get 3 kills without taking damage 50 times'},
-    {name:'Fire Topo', requirement:pending, dmz:'Get 50 Double Kills'},
-    {name:'Hibiscus', requirement:pending, dmz:'Get 50 quickscope kills'}
-  ]),
-  weapon('Mosin-Nagant','Marksman Rifles',[10,17,25,31,38,47,55,61],[
-    {name:'Fractal Snow', requirement:pending, dmz:'Get 2 kills without reloading 30 times'},
-    {name:'Ice Sheer', requirement:pending, dmz:'Get 75 headshot kills'},
-    {name:'Sticker Shock', requirement:pending, dmz:'Get 250 focused kills'}
-  ],['MOSIN NAGANT']),
-
-  weapon('KG-7 Vulcan','Sniper Rifles',[13,22,31,38,47,54,61,69],[
-    {name:'Treeline', requirement:'Get 10 hipfire kills against Players', dmz:pending},
-    {name:'Spidersilk', requirement:'Get 20 headshot kills against Players', dmz:'Get 75 focused kills'},
-    {name:'Tension', requirement:'Get 2 kills without taking damage 20 times against Players', dmz:'Get 2 kills without taking damage 30 times'}
-  ],['KG 7 VULCAN']),
-  weapon('Signal 50','Sniper Rifles',[10,18,28,35,43,52,57,67],[
-    {name:'Anaconda', requirement:'Get 2 kills within 5 seconds 10 times against Players', dmz:'Get 2 kills within 5 seconds 25 times'},
-    {name:'Ripplewave', requirement:'Get 20 quickscope kills against Players', dmz:'Get 30 quickscope kills'},
-    {name:'Sunburn', requirement:'Get 40 longshot kills against Players', dmz:'Get 100 one-shot kills'}
-  ]),
-  weapon('Astaroth .57','Sniper Rifles',[10,15,20,26,32,37,42,48],[
-    {name:'Dry Brush', requirement:pending, dmz:'Get 3 kills without taking damage 25 times'},
-    {name:'Backcountry', requirement:pending, dmz:'Get 75 kills while Mounted'},
-    {name:'Dread Plague', requirement:pending, dmz:'Get 2 kills within 5 seconds 50 times'}
-  ]),
-
-  weapon('Sang 9mm','Pistols',[9,13,17,21,25,28,31,35],[
-    {name:'Autumn', requirement:'Get 25 ADS kills against Players', dmz:'Get 75 ADS kills', official:true},
-    {name:'Snakeskin', requirement:'Get 3 kills without dying 5 times against Players', dmz:'Get 3 kills without taking damage 15 times', official:true},
-    {name:'Space Time', requirement:'Get 50 Akimbo kills against Players', dmz:'Get 125 Akimbo kills', official:true}
-  ],['SANG 9MM']),
-  weapon('Krait P68','Pistols',[10,14,18,22,25,28,32,35],[
-    {name:'Off Grid', requirement:'Get 15 kills while ledge hanging against Players', dmz:'Get 50 kills while ledge hanging'},
-    {name:'Urban Flamingo', requirement:'Get 15 point blank kills against Players', dmz:'Get 50 point blank kills'},
-    {name:'Smokescreen', requirement:'Get 50 kills using a Suppressor against Players', dmz:'Get 125 kills using a Suppressor'}
-  ]),
-  weapon('.50 GS','Pistols',[10,16,22,28,32,36,40,46],[
-    {name:'Frosted', requirement:pending, dmz:'Get 75 headshot kills'},
-    {name:'Red Tiger', requirement:pending, dmz:'Get 75 point blank kills'},
-    {name:'Splatter Ops', requirement:pending, dmz:'Get 20 Double Kills'}
-  ],['50 GS']),
-  weapon('Mojave .357','Pistols',[9,null,null,null,null,null,null,null],[
-    {name:'Garland', requirement:pending, dmz:'Get 75 point blank kills'},
-    {name:'Miami', requirement:pending, dmz:'Get 50 one-shot kills'},
-    {name:'Wallpaper', requirement:pending, dmz:'Get 2 kills without reloading 20 times'}
-  ]),
-
-  weapon('PILA','Launchers',[6,11,16,21,26,31,36,41],[
-    {name:'Frontier', requirement:'Get 10 direct-hit kills against Players', dmz:'Get 25 direct-hit kills'},
-    {name:'Sandwash', requirement:'Get 5 Double Kills against Players', dmz:'Get 100 kills'},
-    {name:'Digital Fall', requirement:'Destroy 30 enemy killstreaks or vehicles', dmz:'Destroy 50 enemy killstreaks or vehicles'}
-  ]),
-  weapon('RPG-8','Launchers',[6,11,16,21,26,31,36,41],[
-    {name:'Bubblegum Ops', requirement:pending, dmz:'Destroy 50 enemy killstreaks or vehicles'},
-    {name:'Digi Bark', requirement:pending, dmz:'Get 25 kills while prone'},
-    {name:'Stone Bits', requirement:pending, dmz:'Get 25 longshot kills'}
-  ],['RPG 8']),
-  weapon('JOKR','Launchers',[6,11,16,21,26,31,36,41],[
-    {name:'Blue Tiger', requirement:pending, dmz:'Destroy 50 enemy killstreaks or vehicles'},
-    {name:'Tectonic', requirement:pending, dmz:'Get 25 longshot kills'},
-    {name:'Thicket', requirement:pending, dmz:'Get 15 Double Kills'}
-  ]),
-  weapon('PM-40 Anvil','Launchers',[6,11,16,21,26,31,36,41],[
-    {name:'Night Snow', requirement:'Get 10 direct-hit kills against Players', dmz:'Get 25 direct-hit kills'},
-    {name:'Recursive', requirement:'Get 5 Double Kills against Players', dmz:'Get 2 kills without reloading 20 times'},
-    {name:'Urban Standard', requirement:'Destroy 30 enemy killstreaks or vehicles', dmz:'Get 100 kills while moving'}
-  ],['PM 40 ANVIL']),
-
-  weapon('FSS Carbon Edge 1095','Melee',[6,11,16,21,26,31,36,41],[
-    {name:'Raster Lite', requirement:'Get 25 kills while jumping against Players', dmz:'Get 100 kills while jumping'},
-    {name:'Stockpile', requirement:'Get 25 heavy melee finisher kills against Players', dmz:'Get 75 heavy melee finisher kills'},
-    {name:'Deathbed', requirement:'Get 2 kills within 5 seconds 25 times against Players', dmz:'Get 2 kills within 5 seconds 50 times'}
-  ],['FSS CARBON EDGE'])
+  weapon('Axion','Assault Rifles',[10,19,26,34,41,48,55,62],[sp('Splinter Rock','Get 20 Longshot Kills against Players','Get 75 Longshot Kills against Enemies'),sp('Sunset Tropic','Get 25 Player Kills with the Miri 40MM Grenade Launcher','Get 75 Enemy Kills with the Miri 40MM Grenade Launcher'),sp('Cyan','Get 2 Kills without Reloading 25 times against Players','Get 2 Kills without Reloading 50 times against Enemies')]),
+  weapon('Han 86','Assault Rifles',[10,18,25,34,42,50,57,65],[sp('Smoke','Get 20 Kills while Mounted against Players','Get 75 Kills while Mounted against Enemies'),sp('Stormwave','Get 50 Player Kills while using a Silencer','Get 125 Enemy Kills while using a Silencer'),sp('Red','Get 3 Player Kills without dying 15 times','Get 3 Enemy Kills without taking damage 50 times')],['HAN 86']),
+  weapon('M4','Assault Rifles',[10,18,26,35,39,44,51,59],[sp('Myriad','Get 20 Point Blank Kills against Players','Get 75 Point Blank Kills against Enemies'),sp('Night Ops','Get 20 Mounted Kills against Players','Get 75 Mounted Kills against Enemies'),sp('Green','Get 25 Kills from Behind against Players','Get 100 Kills from Behind against Enemies')]),
+  weapon('Hyeon Burst','Assault Rifles',[10,17,26,32,40,49,55,62],[sp('Ponderosa','Get 2 Kills without Reloading 10 times against Players','Get 2 Kills without Reloading 30 times against Enemies'),sp('Red Rain','Get 20 Longshot Kills against Players','Get 75 Longshot Kills against Enemies'),sp('Kitty Kaos','Get 100 Kills using Full Auto against Players','Get 250 Kills using a Silencer against Enemies')]),
+  weapon('Kastov 762','Assault Rifles',[10,19,27,37,45,54,61,67],[sp('Samnim','Get 3 Kills without dying 10 times','Get 5 Enemy Kills without taking damage 25 times'),sp('Raster Aux','Get 20 Longshot Kills against Players','Get 75 Enemy Longshot Kills'),sp('Yellow','Get 30 Hipfire Kills against Players','Get 100 Enemy Hipfire Kills')]),
+  weapon('Patriot XMR','Assault Rifles',[11,20,28,36,43,52,59,66],[sp('Dune Sea','Get 20 Hipfire Kills against Players','Get 75 Hipfire Kills against Enemies'),sp('Scorch','Get 50 Player Kills using a Silencer','Get 125 Enemy Kills using a Silencer'),sp('Disperse','Get 30 Longshot Kills against Players','Get 100 Longshot Kills against Enemies')]),
+  weapon('Oden','Assault Rifles',[12,21,25,33,39,46,53,59],[sp('Dark Moss','Get 25 Player Kills with the Miri 40MM Grenade Launcher','Get 75 Enemy Kills with the Miri 40MM Grenade Launcher'),sp('Shale','Get 2 Kills without Reloading 10 times against Players','Get 2 Kills without Reloading 30 times against Enemies'),sp('Hot Rod','Get 100 Kills while ADS against Players','Get 250 Kills while ADS against Enemies')]),
+  weapon('Cronen Squall','Assault Rifles',[10,17,24,31,39,45,54,60],[sp('Oni','Get 20 Point Blank Kills against Players','Get 75 Point Blank Kills against Enemies'),sp('Urban Smoke','Get 20 Mounted Kills against Players','Get 75 Mounted Kills against Enemies'),sp('Optical Reverb','Get 3 Kills without Dying 15 times against Players','Get 50 Kills while ADS against Enemies')]),
+  weapon('Wz. 55 Striga','SMGs',[12,18,23,29,36,41,47,54],[sp('Stellation','Get 50 Player Kills using a Silencer','Get 125 Enemy Kills using a Silencer'),sp('Rattlesnake','Get 20 Player Kills while Jumping','Get 50 Enemy Kills while Jumping'),sp('Dark Tan','Get 40 Point Blank Kills against Players','Get 100 Point Blank Kills against Enemies')],['WZ. 55 STRIGA','WZ 55 STRIGA','WZ.55 STRIGA']),
+  weapon('ISO Nightshade','SMGs',[12,19,25,31,38,44,50,57],[sp('Asphalt','Get 50 Player Kills while Aiming Down Sights','Get 125 Kills while Aiming Down Sights'),sp('Black Topo','Get 10 Double Kills against Players','Get 30 Double Kills against Enemies'),sp('Brown','Get 3 Player Kills without Dying 15 times','Get 3 Enemy Kills without taking damage 50 times')]),
+  weapon('PPSh-41','SMGs',[11,17,23,31,38,44,51,57],[sp('Blackwell','Get 10 Double Kills against Players','Get 30 Double Kills'),sp('Iron','Get 20 Longshot Kills against Players','Get 75 Longshot Kills'),sp('Currents','Get 100 Player Kills while Aiming Down Sights','Get 250 Kills while Aiming Down Sights')],['PPSH-41','PPSH 41']),
+  weapon('X-58 Nyx','SMGs',[9,15,20,25,29,35,42,47],[sp('Sniper Veil','Get 20 Player Kills while Moving','Get 75 Kills while Moving'),sp('Carbonated','Get 20 Longshot Kills against Players','Get 75 Longshot Kills against Enemies'),sp('Lime','Get 40 Headshot Kills against Players','Get 100 Longshot Kills against Enemies')],['X-58 NYX','X58 NYX']),
+  weapon('VEL 46','SMGs',[9,15,22,28,33,40,47,54],[sp('Ghast','Get 20 Player Kills while Prone','Get 100 Enemy Kills while Prone'),sp('Gunmetal','Get 20 Headshots against Players','Get 75 Headshots against Enemies'),sp('Jungle Shadow','Get 50 Kills while ADS against Players','Get 125 Enemy Kills while Aiming Down Sights')]),
+  weapon('REZI 12','Shotguns',[11,18,26,30,38,42,47,54],[sp('Struck Oil','Get 20 Point Blank Kills against Players','Get 75 Point Blank Kills against Enemies'),sp('Brushstroke','Get 10 Longshot Kills against Players','Get 50 Longshot Kills against Enemies'),sp('White Pine','Get 40 Player Kills while Jumping','Get 100 Enemy Kills while Jumping')]),
+  weapon('Warlord','Shotguns',[13,19,25,30,37,43,49,55],[sp('Redshift','Get 20 Player Kills while Moving','Get 75 Enemy Kills while Moving'),sp('Corrupted Clay','Get 10 Double Kills against Players','Get 30 Double Kills against Enemies'),sp('Magma Ire','Get 50 Player Kills while Prone','Get 125 Enemy Kills while Prone')]),
+  weapon('FiNN LMG','LMGs',[12,18,24,31,37,42,48,53],[sp('Desert Tactics','Get 20 Point Blank Kills against Players','Get 75 Point Blank Kills against Enemies'),sp('Green Tiger','Get 2 Kills without Reloading 10 times against Players','Get 2 Kills without Reloading 30 times against Enemies'),sp('Thunderhead','Get 30 Longshot Kills against Players','Get 100 Longshot Kills against Enemies')],['FINN LMG','FINN']),
+  weapon('Type 73','LMGs',[12,19,26,34,41,48,55,61],[sp('Ash Pine','Get 20 Mounted Kills against Players','Get 75 Mounted Kills against Enemies'),sp('Outcrop','Get 10 Double Kills against Players','Get 30 Double Kills against Enemies'),sp('Foxtrail','Get 40 Headshots against Players','Get 100 Headshots against Enemies')]),
+  weapon('APOC-338','LMGs',[9,15,22,26,33,40,44,51],[sp('Phantom Flux','Get 20 Hipfire Kills against Players','Get 75 Hipfire Kills against Enemies'),sp('Mineral','Get 20 Longshot Kills against Players','Get 75 Longshot Kills against Enemies'),sp('Tiger Swipe','Get 100 Player Kills while Prone','Get 250 Enemy Kills while Prone')],['APOC 338']),
+  weapon('MAR-9','Marksman Rifles',[10,19,29,38,45,52,58,69],[sp('Mangrove','Get 20 Mounted Kills against Players','Get 75 Mounted Kills against Enemies'),sp('Fungal Grid','Get 25 Player Kills while Crouched','Get 75 Enemy Kills while Crouched'),sp('White','Get 30 Longshot Kills against Players','Get 100 Longshot Kills against Enemies')],['MAR 9']),
+  weapon('Oris 8.6','Marksman Rifles',[11,18,27,33,42,49,55,61],[sp('Hibiscus','Get 10 Quickscope Kills against Players','Get 50 Quickscope Kills against Enemies'),sp('Fire Topo','Get 20 Double Kills against Players','Get 50 Double Kills against Enemies'),sp('Deep Space','Get 3 Kills without Dying against Players 15 times','Get 3 Enemy Kills without taking damage 50 times')]),
+  weapon('Mosin-Nagant','Marksman Rifles',[10,17,25,31,38,47,55,61],[sp('Fractal Snow','Get 3 Player Kills without Dying 15 times','Get 2 Enemy Kills without Reloading 30 times'),sp('Ice Sheer','Get 25 Headshots against Players','Get 75 Headshots against Enemies'),sp('Sticker Shock','Get 20 Headshots against Players','Get 250 Enemy Kills while Focused')],['MOSIN NAGANT']),
+  weapon('KG-7 Vulcan','Sniper Rifles',[13,22,31,38,47,54,61,69],[sp('Treeline','Get 10 Hipfire Kills against Players','No separate DMZ requirement currently listed'),sp('Spidersilk','Get 20 Headshot Kills against Players','Get 75 Kills while Focused'),sp('Tension','Get 2 Player Kills without taking damage 20 times','Get 2 Enemy Kills without taking damage 30 times')],['KG 7 VULCAN']),
+  weapon('Signal 50','Sniper Rifles',[10,18,28,35,43,52,57,67],[sp('Anaconda','Get 2 Player Kills within 5 Seconds 10 times','Get 2 Kills within 5 Seconds 25 times'),sp('Ripplewave','Get 20 Quickscope Kills against Players','Get 30 Quickscope Kills against Enemies'),sp('Sunburn','Get 40 Longshot Kills against Players','Get 100 One Shot Kills')]),
+  weapon('Astaroth .57','Sniper Rifles',[10,15,20,26,32,37,42,48],[sp('Dry Brush','Get 3 Player Kills without Dying 10 times','Get 3 Enemy Kills without taking damage 25 times'),sp('Backcountry','Get 20 Mounted Kills against Players','Get 75 Mounted Kills against Enemies'),sp('Dread Plague','Get 2 Player Kills within 5 Seconds 20 times','Get 2 Enemy Kills within 5 Seconds 50 times')]),
+  weapon('Sang 9mm','Pistols',[9,13,17,21,25,28,31,35],[sp('Autumn','Get 25 Player Kills while Aiming Down Sights','Get 75 Enemy Kills while Aiming Down Sights'),sp('Snakeskin','Get 3 Player Kills without dying 5 times','Get 3 Enemy Kills without taking damage 15 times'),sp('Space Time','Get 50 Player Kills while using Akimbo','Get 125 Enemy Kills while using Akimbo')],['SANG 9MM']),
+  weapon('Krait P68','Pistols',[10,14,18,22,25,28,32,35],[sp('Off Grid','Get 15 Player Kills while Ledge Hanging','Get 50 Enemy Kills while Ledge Hanging'),sp('Urban Flamingo','Get 15 Point Blank Kills against Players','Get 50 Point Blank Kills against Enemies'),sp('Smokescreen','Get 50 Player Kills while using a Silencer','Get 125 Enemy Kills while using a Silencer')]),
+  weapon('.50 GS','Pistols',[10,16,22,28,32,36,40,46],[sp('Frosted','Get 20 Headshot Kills against Players','Get 75 Headshot Kills against Enemies'),sp('Splatter Ops','Get 7 Double Kills against Players','Get 20 Double Kills against Enemies'),sp('Red Tiger','Get 30 Point Blank Kills against Players','Get 75 Point Blank Kills against Enemies')],['50 GS']),
+  weapon('Mojave .357','Pistols',[9,13,18,22,26,30,35,40],[sp('Miami','Get 20 Headshot Kills against Players','Get 50 One Shot Kills'),sp('Wallpaper','Get 7 Double Kills against Players','Get 2 Enemy Kills without Reloading 20 times'),sp('Garland','Get 30 Point Blank Kills against Players','Get 75 Point Blank Kills against Enemies')]),
+  weapon('PILA','Launchers',[6,11,16,21,26,31,36,41],[sp('Frontier','Get 10 Direct Shot Kills against Players','Get 25 Direct Shot Kills against Enemies'),sp('Sandwash','Get 5 Double Kills against Players','Get 100 Double Kills against Enemies'),sp('Digital Fall','Destroy 30 Killstreaks or Vehicles','Destroy 50 Killstreaks or Vehicles')]),
+  weapon('RPG-8','Launchers',[6,11,16,21,26,31,36,41],[sp('Digi Bark','Get 10 Direct Shot Kills against Players','Get 25 Enemy Kills while Prone'),sp('Stone Bits','Get 5 Double Kills against Players','Get 25 Longshot Kills against Enemies'),sp('Bubblegum Ops','Destroy 30 Killstreaks or Vehicles','Destroy 50 Killstreaks or Vehicles')],['RPG 8']),
+  weapon('JOKR','Launchers',[6,11,16,21,26,31,36,41],[sp('Thicket','Get 10 Direct Shot Kills against Players','Get 15 Double Kills against Enemies'),sp('Tectonic','Get 5 Double Kills against Players','Get 25 Longshot Kills against Enemies'),sp('Blue Tiger','Destroy 30 Killstreaks or Vehicles','Destroy 50 Killstreaks or Vehicles')]),
+  weapon('PM-40 Anvil','Launchers',[6,11,16,21,26,31,36,41],[sp('Night Snow','Get 10 Direct Shot Kills against Players','Get 25 Direct Shot Kills against Enemies'),sp('Recursive','Get 5 Double Kills against Players','Get 2 Kills without Reloading 20 times against Enemies'),sp('Urban Standard','Destroy 30 Killstreaks or Vehicles','Get 100 Enemy Kills while Moving')],['PM 40 ANVIL']),
+  weapon('FSS Carbon Edge 1095','Melee',[6,11,16,21,26,31,36,41],[sp('Raster Lite','Get 25 Player Kills while Jumping','Get 100 Enemy Kills while Jumping'),sp('Stockpile','Get 25 Player Kills using the Heavy Melee Finisher','Get 75 Enemy Kills using the Heavy Melee Finisher'),sp('Deathbed','Get 2 Kills in 5 seconds against Players 25 times','Get 2 Kills in 5 seconds against Enemies 50 times')],['FSS CARBON EDGE','FSS CARBON EDGE 1095 KNIFE'])
 ];
 
-const mastery = [
-  { name:'Mercurial Drift', requirement:'Get 10 kills in a match 250 times' },
-  { name:'Polyatomic Reforged', requirement:'Get 3 kills without taking damage 300 times' },
-  { name:'Orion Reforged', requirement:'Get 5 kills without dying 500 times' }
+const globalCamos = [
+  { name:'Divergence', type:'Completionist', requirement:'Complete 33 Harmonic Break Camo Challenges' },
+  { name:'Mercurial Drift', type:'Multiplayer Mastery', requirement:'Unlock Divergence, then get 10 Kills in a match 250 times' },
+  { name:'Polyatomic Reforged', type:'Multiplayer Mastery', requirement:'Unlock Mercurial Drift, then get 3 Kills without taking Damage 300 times' },
+  { name:'Orion Reforged', type:'Multiplayer Mastery', requirement:'Unlock Polyatomic Reforged, then get 5 Kills without dying 500 times' },
+  { name:'Pyroclast', type:'Weapon Prestige', requirement:'Reach Weapon Prestige 1 on a weapon' },
+  { name:'Pyroclast Terminus', type:'Weapon Prestige', requirement:'Max Weapon Prestige 1 on a weapon' },
+  { name:'Pyroclast Scatter', type:'Prestige Master', requirement:'Reach Prestige Master Level 150' },
+  { name:'Pyroclast Cascade', type:'Prestige Master', requirement:'Reach Prestige Master Level 250' }
 ];
-
-const prestige = [
-  { name:'Pyroclast', requirement:'Reach Weapon Prestige 1, Level 1' },
-  { name:'Pyroclast Terminus', requirement:'Reach the maximum level of Weapon Prestige 1' },
-  { name:'Pyroclast Scatter', requirement:'Reach Prestige Master 150' },
-  { name:'Pyroclast Cascade', requirement:'Reach Prestige Master 250' }
-];
-
+const mastery = globalCamos.filter(x => x.type === 'Multiplayer Mastery');
+const prestige = globalCamos.filter(x => x.type.includes('Prestige'));
 const categories = ['Assault Rifles','SMGs','Shotguns','LMGs','Marksman Rifles','Sniper Rifles','Pistols','Launchers','Melee'];
-
 function allCamosForWeapon(w) {
-  return [
-    ...w.militaryLevels.map((level,i)=>({ name:`Military Camo ${i+1}`, type:'Military', requirement:level ? `Unlocks at Weapon Level ${level}` : 'Weapon level requirement: verify in-game' })),
-    ...w.specials.map(x=>({ ...x, type:'Special' })),
-    ...w.completionist.map(x=>({ ...x, type:'Completionist' }))
-  ];
+  return [...w.militaryLevels.map((level,i)=>({ name:`Military Camo ${i+1}`, type:'Military', requirement:`Reach Weapon Level ${level}` })),...w.specials.map(x=>({ ...x, type:'Special' })),...w.completionist.map(x=>({ ...x, type:'Completionist' }))];
 }
-
-module.exports = { weapons, categories, mastery, prestige, allCamosForWeapon, pending };
+module.exports = { weapons, categories, mastery, prestige, globalCamos, allCamosForWeapon, pending };
