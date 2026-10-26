@@ -78,12 +78,12 @@ def parse_text(lines):
 
 
 def fingerprint(gray):
-    small = cv2.resize(gray, (72, 40), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(gray, (64, 36), interpolation=cv2.INTER_AREA)
     return small.astype(np.int16)
 
 
 def text_activity(gray):
-    small = cv2.resize(gray, (220, 124), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(gray, (180, 100), interpolation=cv2.INTER_AREA)
     _, bright = cv2.threshold(small, 190, 255, cv2.THRESH_BINARY)
     return float(np.count_nonzero(bright)) / float(bright.size)
 
@@ -108,11 +108,9 @@ def main():
     p.add_argument("--fps", type=float, default=4.0)
     args = p.parse_args()
 
-    fps = min(max(args.fps, 1.0), 6.0)
+    fps = min(max(args.fps, 1.0), 4.0)
     interval = 1.0 / fps
 
-    # Limit inference parallelism. The tracker is latency-insensitive and should not
-    # compete with the game for all CPU cores during an OCR pass.
     try:
         cv2.setNumThreads(1)
     except Exception:
@@ -138,13 +136,13 @@ def main():
             monitor = dict(sct.monitors[1])
             monitor_source = "mss-1-fallback"
 
-        # MW4 unlock cards live on the upper/right side. Keeping the capture region
-        # tighter cuts memory bandwidth and OCR work substantially.
+        # Narrow notification-only capture area. This is intentionally much smaller
+        # than the previous right-half scan to minimize memory bandwidth and OCR cost.
         region = {
-            "left": monitor["left"] + int(monitor["width"] * 0.43),
-            "top": monitor["top"],
-            "width": max(420, int(monitor["width"] * 0.56)),
-            "height": max(420, int(monitor["height"] * 0.82)),
+            "left": monitor["left"] + int(monitor["width"] * 0.52),
+            "top": monitor["top"] + int(monitor["height"] * 0.04),
+            "width": max(360, int(monitor["width"] * 0.47)),
+            "height": max(320, int(monitor["height"] * 0.62)),
         }
 
         emit({
@@ -180,25 +178,21 @@ def main():
             visual_change = mean_delta >= 1.45
             strong_change = mean_delta >= 2.8
 
-            # Event-driven OCR is the normal path. A much slower safety heartbeat
-            # catches a missed popup without running ONNX inference every second.
             heartbeat_due = (now - last_ocr) >= 4.0
             burst_due = (now - last_ocr) >= 0.55 and (visual_change or activity_spike)
             should_ocr = heartbeat_due or burst_due
 
             if should_ocr:
                 last_ocr = now
-
-                # Use the raw crop first; avoid expensive full-frame upscaling unless needed.
                 lines, confidence = ocr_lines(ocr, bgr)
                 event = parse_text(lines)
 
                 if not event and (strong_change or activity_spike):
                     h, w = bgr.shape[:2]
-                    focus = bgr[0:int(h * 0.72), int(w * 0.20):w]
+                    focus = bgr[0:int(h * 0.72), int(w * 0.18):w]
                     focus_gray = cv2.cvtColor(focus, cv2.COLOR_BGR2GRAY)
                     focus_gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(focus_gray)
-                    focus_up = cv2.resize(focus_gray, None, fx=1.35, fy=1.35, interpolation=cv2.INTER_CUBIC)
+                    focus_up = cv2.resize(focus_gray, None, fx=1.25, fy=1.25, interpolation=cv2.INTER_CUBIC)
                     focus_lines, focus_conf = ocr_lines(ocr, focus_up)
                     if focus_lines:
                         merged = list(lines)
