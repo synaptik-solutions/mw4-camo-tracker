@@ -84,8 +84,18 @@ function getWeaponProgress(progress,weaponName){ const keyName=canonicalWeaponNa
 function broadcastProgress(progress){ store.set('progress',progress); mainWindow?.webContents.send('progress-updated',progress); }
 function saveUnlock(rawEvent){
   const event=normalizeEvent(rawEvent),progress=store.get('progress'),{key:keyName,current:weapon}=getWeaponProgress(progress,event.weapon);
-  if(event.family&&Number.isInteger(event.number)&&event.number>0){ const family=event.family.includes('MILITARY')?'MILITARY CAMO':event.family; for(let n=1;n<=event.number;n++){ const token=`${family} ${n}`; if(!weapon.unlocks.includes(token)) weapon.unlocks.push(token); } }
-  else if(event.camo&&!weapon.unlocks.includes(event.camo)) weapon.unlocks.push(event.camo);
+  if(event.family&&Number.isInteger(event.number)&&event.number>0){
+    const family=event.family.includes('MILITARY')?'MILITARY CAMO':event.family;
+    if(family==='MILITARY CAMO'){
+      for(let n=1;n<=event.number;n++){
+        const token=`MILITARY CAMO ${n}`;
+        if(!weapon.unlocks.includes(token)) weapon.unlocks.push(token);
+      }
+    }else{
+      const token=`${family} ${event.number}`;
+      if(!weapon.unlocks.includes(token)) weapon.unlocks.push(token);
+    }
+  }else if(event.camo&&!weapon.unlocks.includes(event.camo)) weapon.unlocks.push(event.camo);
   weapon.lastSeen=event.timestamp; progress.weapons[keyName]=weapon; progress.events.unshift({...event,weapon:keyName}); progress.events=progress.events.slice(0,300); broadcastProgress(progress); mainWindow?.webContents.send('detector-event',{...event,weapon:keyName});
   if(overlayWindow&&store.get('settings.overlay')){
     const settings=store.get('settings');
@@ -103,13 +113,15 @@ function setCamoStatus(weaponName,camoName,complete){
   if(!token) return {ok:false};
 
   if(complete){
-    const catalogWeapon=catalogWeaponFor(weaponName);
-    const ordered=catalogWeapon?allCamosForWeapon(catalogWeapon):[];
-    const clickedIndex=ordered.findIndex(item=>key(item.name)===token);
-    const items=clickedIndex>=0?ordered.slice(0,clickedIndex+1):[{name:camoName}];
-    for(const item of items){
-      const itemToken=key(item.name);
-      if(itemToken&&!current.unlocks.includes(itemToken)) current.unlocks.push(itemToken);
+    const militaryMatch=token.match(/^MILITARY CAMO (\d+)$/);
+    if(militaryMatch){
+      const target=Math.max(1,Math.min(8,Number(militaryMatch[1])));
+      for(let n=1;n<=target;n++){
+        const itemToken=`MILITARY CAMO ${n}`;
+        if(!current.unlocks.includes(itemToken)) current.unlocks.push(itemToken);
+      }
+    }else if(!current.unlocks.includes(token)){
+      current.unlocks.push(token);
     }
   }else{
     current.unlocks=current.unlocks.filter(x=>x!==token);
