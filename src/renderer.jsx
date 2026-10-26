@@ -1,12 +1,11 @@
 const React = require('react');
 const { createRoot } = require('react-dom/client');
-const { weapons: catalogWeapons, categories, mastery, prestige, allCamosForWeapon, pending } = require('./camoCatalog');
+const { weapons: catalogWeapons, categories, globalCamos, allCamosForWeapon, pending } = require('./camoCatalog');
 
 function fmtTime(ts) {
   if (!ts) return '—';
   try { return new Date(ts).toLocaleString(); } catch { return ts; }
 }
-
 function key(value) { return String(value || '').trim().toUpperCase(); }
 
 function App() {
@@ -19,7 +18,6 @@ function App() {
   const [openWeapon, setOpenWeapon] = React.useState(null);
 
   const refresh = React.useCallback(async () => setState(await window.tracker.getState()), []);
-
   React.useEffect(() => {
     refresh();
     window.tracker.onProgress(progress => setState(s => ({...s, progress})));
@@ -33,20 +31,11 @@ function App() {
 
   function weaponProgress(w) {
     const aliases = [w.name, ...(w.aliases || [])].map(key);
-    for (const alias of aliases) {
-      if (progress.weapons?.[alias]) return progress.weapons[alias];
-    }
+    for (const alias of aliases) if (progress.weapons?.[alias]) return progress.weapons[alias];
     return { unlocks:[], lastSeen:null };
   }
-
-  function isDone(w, camoName) {
-    const unlocks = (weaponProgress(w).unlocks || []).map(key);
-    return unlocks.includes(key(camoName));
-  }
-
-  function doneCount(w) {
-    return allCamosForWeapon(w).filter(c => isDone(w, c.name)).length;
-  }
+  function isDone(w, camoName) { return (weaponProgress(w).unlocks || []).map(key).includes(key(camoName)); }
+  function doneCount(w) { return allCamosForWeapon(w).filter(c => isDone(w, c.name)).length; }
 
   const totalWeaponCamos = catalogWeapons.reduce((sum,w)=>sum + allCamosForWeapon(w).length, 0);
   const totalWeaponDone = catalogWeapons.reduce((sum,w)=>sum + doneCount(w), 0);
@@ -60,20 +49,13 @@ function App() {
     setState(s => ({...s, settings}));
     await window.tracker.saveSettings(settings);
   }
-
-  async function toggleCamo(w, camo, complete) {
-    await window.tracker.setCamoStatus(w.name, camo.name, complete);
-  }
-
-  async function toggleGlobal(name, complete) {
-    await window.tracker.setCamoStatus('GLOBAL', name, complete);
-  }
+  async function toggleCamo(w, camo, complete) { await window.tracker.setCamoStatus(w.name, camo.name, complete); }
+  async function toggleGlobal(name, complete) { await window.tracker.setCamoStatus('GLOBAL', name, complete); }
 
   const visibleWeapons = catalogWeapons.filter(w => {
     const classMatch = category === 'All' || w.category === category;
     const q = query.trim().toLowerCase();
-    const searchMatch = !q || w.name.toLowerCase().includes(q) || w.category.toLowerCase().includes(q);
-    return classMatch && searchMatch;
+    return classMatch && (!q || w.name.toLowerCase().includes(q) || w.category.toLowerCase().includes(q));
   });
 
   return <div className="shell">
@@ -101,48 +83,23 @@ function App() {
       </>}
 
       {tab==='weapons' && <>
-        <header><div><span className="eyebrow">FULL CAMO CHECKLIST</span><h2>Weapons</h2><p>All 33 launch weapons, their camo requirements, and your saved completion status.</p></div><div className="catalogSummary"><b>{totalWeaponDone}/{totalWeaponCamos}</b><span>weapon camos complete</span></div></header>
-        <div className="filters">
-          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search weapon…" />
-          <div className="filterChips">{['All',...categories].map(x=><button key={x} className={category===x?'selected':''} onClick={()=>setCategory(x)}>{x}</button>)}</div>
-        </div>
+        <header><div><span className="eyebrow">FULL CAMO CHECKLIST</span><h2>Weapons</h2><p>All 33 launch weapons, their Multiplayer requirements, and your saved completion status.</p></div><div className="catalogSummary"><b>{totalWeaponDone}/{totalWeaponCamos}</b><span>weapon camos complete</span></div></header>
+        <div className="filters"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search weapon…" /><div className="filterChips">{['All',...categories].map(x=><button key={x} className={category===x?'selected':''} onClick={()=>setCategory(x)}>{x}</button>)}</div></div>
         <div className="weaponList">
           {visibleWeapons.map(w => {
-            const camos = allCamosForWeapon(w);
-            const completed = doneCount(w);
-            const pct = Math.round((completed/camos.length)*100);
-            const expanded = openWeapon === w.name;
+            const camos = allCamosForWeapon(w), completed = doneCount(w), pct = Math.round((completed/camos.length)*100), expanded = openWeapon === w.name;
             return <section className={'card weaponCard '+(expanded?'expanded':'')} key={w.name}>
-              <button className="weaponHeader" onClick={()=>setOpenWeapon(expanded?null:w.name)}>
-                <div><span className="classTag">{w.category}</span><h3>{w.name}</h3><small>Last detected: {fmtTime(weaponProgress(w).lastSeen)}</small></div>
-                <div className="weaponStats"><b>{completed}/{camos.length}</b><span>{pct}%</span><i>{expanded?'−':'+'}</i></div>
-              </button>
+              <button className="weaponHeader" onClick={()=>setOpenWeapon(expanded?null:w.name)}><div><span className="classTag">{w.category}</span><h3>{w.name}</h3><small>Last detected: {fmtTime(weaponProgress(w).lastSeen)}</small></div><div className="weaponStats"><b>{completed}/{camos.length}</b><span>{pct}%</span><i>{expanded?'−':'+'}</i></div></button>
               <div className="weaponBar"><div style={{width:`${pct}%`}}></div></div>
-              {expanded && <div className="camoTable">
-                <div className="camoHead"><span>Status</span><span>Camo</span><span>Requirement</span></div>
-                {camos.map(c => {
-                  const done = isDone(w,c.name);
-                  const uncertain = c.requirement === pending || String(c.requirement).toLowerCase().includes('verify');
-                  return <label className={'camoRow '+(done?'done':'')} key={c.name}>
-                    <span className="checkCell"><input type="checkbox" checked={done} onChange={e=>toggleCamo(w,c,e.target.checked)}/></span>
-                    <span className="camoName"><b>{c.name}</b><small className={'type '+c.type.toLowerCase()}>{c.type}</small></span>
-                    <span className="requirement">{c.requirement}{uncertain && <small className="verify">Public sources differ — verify in game</small>}{c.dmz && <small className="dmz">DMZ: {c.dmz}</small>}</span>
-                  </label>;
-                })}
-              </div>}
+              {expanded && <div className="camoTable"><div className="camoHead"><span>Status</span><span>Camo</span><span>Requirement</span></div>{camos.map(c => {
+                const done = isDone(w,c.name), uncertain = c.requirement === pending || String(c.requirement).toLowerCase().includes('verify');
+                return <label className={'camoRow '+(done?'done':'')} key={c.name}><span className="checkCell"><input type="checkbox" checked={done} onChange={e=>toggleCamo(w,c,e.target.checked)}/></span><span className="camoName"><b>{c.name}</b><small className={'type '+c.type.toLowerCase()}>{c.type}</small></span><span className="requirement">{c.requirement}{uncertain && <small className="verify">Verify in game</small>}{c.dmz && <small className="dmz">DMZ: {c.dmz}</small>}</span></label>;
+              })}</div>}
             </section>;
           })}
         </div>
-        <section className="card globalSection">
-          <span className="eyebrow">ENDGAME / PRESTIGE</span><h3>Mastery & Weapon Prestige Camos</h3><p className="muted">These are tracked separately from each weapon checklist. Check them manually as you earn them.</p>
-          <div className="globalGrid">
-            {[...mastery.map(x=>({...x,type:'Mastery'})), ...prestige.map(x=>({...x,type:'Prestige'}))].map(c=>{
-              const done=globalUnlocks.includes(key(c.name));
-              return <label className={'globalCamo '+(done?'done':'')} key={c.name}><input type="checkbox" checked={done} onChange={e=>toggleGlobal(c.name,e.target.checked)}/><div><b>{c.name}</b><small>{c.type}</small><p>{c.requirement}</p></div></label>;
-            })}
-          </div>
-        </section>
-        <p className="sourceNote">Military rows show the weapon level that unlocks each camo challenge. Some challenge values are marked for in-game verification where current public sources disagree.</p>
+        <section className="card globalSection"><span className="eyebrow">ENDGAME / PRESTIGE</span><h3>Divergence, Mastery & Prestige</h3><p className="muted">These sit outside the 14-camo weapon boards. Check them manually as you earn them.</p><div className="globalGrid">{globalCamos.map(c=>{const done=globalUnlocks.includes(key(c.name));return <label className={'globalCamo '+(done?'done':'')} key={c.name}><input type="checkbox" checked={done} onChange={e=>toggleGlobal(c.name,e.target.checked)}/><div><b>{c.name}</b><small>{c.type}</small><p>{c.requirement}</p></div></label>;})}</div></section>
+        <p className="sourceNote">Military camos unlock by weapon level. Special and completionist rows show Multiplayer requirements; DMZ alternatives are shown underneath when available.</p>
       </>}
 
       {tab==='history' && <><header><div><span className="eyebrow">EVENT LOG</span><h2>History</h2><p>Latest detector events stored locally on this PC.</p></div></header><section className="card"><div className="list">{events.length ? events.map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span><small className="raw">{e.rawText || ''}</small></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">No history yet.</p>}</div></section></>}
@@ -158,5 +115,4 @@ function App() {
     </main>
   </div>;
 }
-
 createRoot(document.getElementById('root')).render(<App />);
