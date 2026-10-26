@@ -30,10 +30,13 @@ function App() {
   const refresh = React.useCallback(async () => setState(await window.tracker.getState()), []);
   React.useEffect(() => {
     refresh();
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
     window.tracker.onProgress(progress => setState(s => ({...s, progress})));
     window.tracker.onDetectorState(info => setRunning(Boolean(info?.running)));
     window.tracker.onDetectorError(msg => setError(String(msg || 'Unknown detector error')));
     window.tracker.onUpdateStatus(update => setState(s => ({...s, update})));
+    return () => window.removeEventListener('focus', onFocus);
   }, [refresh]);
 
   const progress = state.progress || { weapons:{}, events:[] };
@@ -43,8 +46,15 @@ function App() {
 
   function weaponProgress(w) {
     const aliases = [w.name, ...(w.aliases || [])].map(key);
-    for (const alias of aliases) if (progress.weapons?.[alias]) return progress.weapons[alias];
-    return { unlocks:[], lastSeen:null };
+    const merged = new Set();
+    let lastSeen = null;
+    for (const alias of aliases) {
+      const record = progress.weapons?.[alias];
+      if (!record) continue;
+      for (const unlock of (record.unlocks || [])) merged.add(key(unlock));
+      if (record.lastSeen && (!lastSeen || new Date(record.lastSeen) > new Date(lastSeen))) lastSeen = record.lastSeen;
+    }
+    return { unlocks:[...merged], lastSeen };
   }
   function isDone(w, camoName) { return (weaponProgress(w).unlocks || []).map(key).includes(key(camoName)); }
   function doneCount(w) { return allCamosForWeapon(w).filter(c => isDone(w, c.name)).length; }
@@ -55,6 +65,11 @@ function App() {
   const weaponsComplete = catalogWeapons.filter(w => doneCount(w) === allCamosForWeapon(w).length).length;
   const globalProgress = progress.weapons?.GLOBAL || { unlocks:[] };
   const globalUnlocks = (globalProgress.unlocks || []).map(key);
+  const totalGlobalCamos = globalCamos.length;
+  const totalGlobalDone = globalCamos.filter(c => globalUnlocks.includes(key(c.name))).length;
+  const totalAllCamos = totalWeaponCamos + totalGlobalCamos;
+  const totalAllDone = totalWeaponDone + totalGlobalDone;
+  const overallCompletionPct = totalAllCamos ? Math.round((totalAllDone / totalAllCamos) * 1000) / 10 : 0;
 
   async function saveSettings(patch) {
     const settings = { ...state.settings, ...patch };
@@ -83,11 +98,12 @@ function App() {
         {error && <div className="error">{error}</div>}
         <div className="cards">
           <section className="card latest"><span className="eyebrow">LATEST DETECTION</span><h3>{latest?.weapon || 'No unlock detected yet'}</h3><p>{latest ? (latest.camo || `${latest.family || 'CAMO'} ${latest.number || ''}`) : 'Leave the tracker running while you play.'}</p></section>
+          <section className="card metric"><span>Overall complete</span><b>{overallCompletionPct}<em>%</em></b></section>
           <section className="card metric"><span>Weapon camos</span><b>{totalWeaponDone}<em>/{totalWeaponCamos}</em></b></section>
           <section className="card metric"><span>Weapons started</span><b>{weaponsStarted}<em>/33</em></b></section>
           <section className="card metric"><span>Weapons complete</span><b>{weaponsComplete}<em>/33</em></b></section>
         </div>
-        <div className="overallBar"><div style={{width:`${totalWeaponCamos ? (totalWeaponDone/totalWeaponCamos)*100 : 0}%`}}></div></div>
+        <div className="overallBar"><div style={{width:`${overallCompletionPct}%`}}></div></div>
         <div className="twoCol">
           <section className="card"><span className="eyebrow">RECENT</span><h3>Recent unlocks</h3><div className="list">{events.length ? events.slice(0,8).map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">Nothing detected yet.</p>}</div></section>
           <section className="card"><span className="eyebrow">MISSED UNLOCK PROTECTION</span><h3>Automatic backfill</h3><p className="muted">If the next popup says Military Camo 5 but the tracker only had 1–3, it automatically fills Camo 4 as completed too.</p><div className="example"><span>Detected</span><b>MILITARY CAMO 5</b><span>Saved</span><b>1 → 5</b></div></section>
@@ -95,7 +111,7 @@ function App() {
       </>}
 
       {tab==='weapons' && <>
-        <header><div><span className="eyebrow">FULL CAMO CHECKLIST</span><h2>Weapons</h2><p>All 33 launch weapons, their Multiplayer requirements, and your saved completion status.</p></div><div className="catalogSummary"><b>{totalWeaponDone}/{totalWeaponCamos}</b><span>weapon camos complete</span></div></header>
+        <header><div><span className="eyebrow">FULL CAMO CHECKLIST</span><h2>Weapons</h2><p>All 33 launch weapons, their Multiplayer requirements, and your saved completion status.</p></div><div className="catalogSummary"><b>{totalWeaponDone}/{totalWeaponCamos}</b><span>{overallCompletionPct}% overall complete</span></div></header>
         <div className="filters"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search weapon…" /><div className="filterChips">{['All',...categories].map(x=><button key={x} className={category===x?'selected':''} onClick={()=>setCategory(x)}>{x}</button>)}</div></div>
         <div className="weaponList">
           {visibleWeapons.map(w => {
@@ -122,7 +138,7 @@ function App() {
         <label>Screen checks per second<select value={state.settings.scanFps || 4} onChange={e=>saveSettings({scanFps:Number(e.target.value)})}><option value="2">2 — lowest power</option><option value="4">4 — recommended</option><option value="6">6 — faster detection</option></select></label>
         <label className="toggle"><input type="checkbox" checked={Boolean(state.settings.overlay)} onChange={e=>saveSettings({overlay:e.target.checked})}/><span>Show small unlock overlay</span></label>
         <label className="toggle"><input type="checkbox" checked={Boolean(state.settings.autoStart)} onChange={e=>saveSettings({autoStart:e.target.checked})}/><span>Start detector when app opens</span></label>
-        <div className="powerNote"><b>Low-power mode</b><p>The detector captures only the right-side notification region, downsamples frames for a cheap change check, and runs OCR only after a meaningful visual change.</p></div>
+        <div className="powerNote"><b>Low-power mode</b><p>The detector watches two small percentage-based regions on the selected display, downsamples frames for a cheap change check, and runs OCR only after meaningful visual changes.</p></div>
         <button className="danger" onClick={async()=>{if(confirm('Clear all locally saved camo progress?')){await window.tracker.clearProgress();refresh();}}}>Clear local progress</button>
       </section></>}
     </main>
