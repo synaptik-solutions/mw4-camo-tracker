@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
+const { weapons: camoWeapons } = require('./camoCatalog');
 
 const store = new Store({
   defaults: {
@@ -15,6 +16,18 @@ let mainWindow;
 let overlayWindow;
 let detectorProcess;
 let lastOverlayTimer;
+
+const weaponAliases = new Map();
+for (const item of camoWeapons) {
+  for (const alias of [item.name, ...(item.aliases || [])]) {
+    weaponAliases.set(String(alias).trim().toUpperCase(), item.name.toUpperCase());
+  }
+}
+
+function canonicalWeaponName(value) {
+  const raw = String(value || 'UNKNOWN').trim().toUpperCase();
+  return weaponAliases.get(raw) || raw;
+}
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -69,7 +82,7 @@ function getMonitors() {
 function normalizeEvent(event) {
   return {
     type: event.type || 'unlock',
-    weapon: String(event.weapon || 'UNKNOWN').trim().toUpperCase(),
+    weapon: canonicalWeaponName(event.weapon),
     family: event.family ? String(event.family).trim().toUpperCase() : null,
     number: Number.isInteger(event.number) ? event.number : null,
     camo: event.camo ? String(event.camo).trim().toUpperCase() : null,
@@ -79,15 +92,28 @@ function normalizeEvent(event) {
   };
 }
 
+function getWeaponProgress(progress, weaponName) {
+  const key = canonicalWeaponName(weaponName);
+  const current = progress.weapons[key] || { unlocks: [], lastSeen: null };
+  current.unlocks = Array.isArray(current.unlocks) ? current.unlocks.map(x => String(x).toUpperCase()) : [];
+  return { key, current };
+}
+
+function broadcastProgress(progress) {
+  store.set('progress', progress);
+  mainWindow?.webContents.send('progress-updated', progress);
+}
+
 function saveUnlock(rawEvent) {
   const event = normalizeEvent(rawEvent);
   const progress = store.get('progress');
-  const weapon = progress.weapons[event.weapon] || { unlocks: [], lastSeen: null };
+  const { key, current: weapon } = getWeaponProgress(progress, event.weapon);
 
   // If Camo 5 is seen after Camo 3, automatically backfill Camo 4.
   if (event.family && Number.isInteger(event.number) && event.number > 0) {
+    const family = event.family.includes('MILITARY') ? 'MILITARY CAMO' : event.family;
     for (let n = 1; n <= event.number; n += 1) {
-      const token = `${event.family} ${n}`;
+      const token = `${family} ${n}`;
       if (!weapon.unlocks.includes(token)) weapon.unlocks.push(token);
     }
   } else if (event.camo && !weapon.unlocks.includes(event.camo)) {
@@ -95,22 +121,36 @@ function saveUnlock(rawEvent) {
   }
 
   weapon.lastSeen = event.timestamp;
-  progress.weapons[event.weapon] = weapon;
-  progress.events.unshift(event);
+  progress.weapons[key] = weapon;
+  progress.events.unshift({ ...event, weapon: key });
   progress.events = progress.events.slice(0, 300);
-  store.set('progress', progress);
+  broadcastProgress(progress);
 
-  mainWindow?.webContents.send('progress-updated', progress);
-  mainWindow?.webContents.send('detector-event', event);
+  mainWindow?.webContents.send('detector-event', { ...event, weapon: key });
 
   if (overlayWindow && store.get('settings.overlay')) {
-    overlayWindow.webContents.send('overlay-event', event);
+    overlayWindow.webContents.send('overlay-event', { ...event, weapon: key });
     overlayWindow.showInactive();
     clearTimeout(lastOverlayTimer);
     lastOverlayTimer = setTimeout(() => {
       if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
     }, 4500);
   }
+}
+
+function setCamoStatus(weaponName, camoName, complete) {
+  const progress = store.get('progress');
+  const { key, current } = getWeaponProgress(progress, weaponName);
+  const token = String(camoName || '').trim().toUpperCase();
+  if (!token) return { ok: false };
+
+  const has = current.unlocks.includes(token);
+  if (complete && !has) current.unlocks.push(token);
+  if (!complete && has) current.unlocks = current.unlocks.filter(x => x !== token);
+  current.lastSeen = current.lastSeen || new Date().toISOString();
+  progress.weapons[key] = current;
+  broadcastProgress(progress);
+  return { ok: true };
 }
 
 function stopDetector() {
@@ -128,7 +168,6 @@ function detectorCommand() {
 
   if (fs.existsSync(packagedExe)) return { command: packagedExe, prefixArgs: [] };
 
-  // Development fallback only. The shipped installer always uses detector.exe.
   const script = path.join(__dirname, '..', 'worker', 'detector.py');
   if (process.platform === 'win32') return { command: 'py', prefixArgs: ['-3', script] };
   return { command: 'python3', prefixArgs: [script] };
@@ -217,10 +256,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('start-detector', () => ({ ok: startDetector() }));
   ipcMain.handle('stop-detector', () => { stopDetector(); return { ok: true }; });
+  ipcMain.handle('set-camo-status', (_, weaponName, camoName, complete) => setCamoStatus(weaponName, camoName, complete));
   ipcMain.handle('clear-progress', () => {
     const blank = { weapons: {}, events: [] };
-    store.set('progress', blank);
-    mainWindow?.webContents.send('progress-updated', blank);
+    broadcastProgress(blank);
     return { ok: true };
   });
   ipcMain.handle('test-unlock', (_, event) => { saveUnlock(event); return { ok: true }; });
