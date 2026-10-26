@@ -26,6 +26,7 @@ function App() {
   const [category, setCategory] = React.useState('All');
   const [query, setQuery] = React.useState('');
   const [openWeapon, setOpenWeapon] = React.useState(null);
+  const [diagnostics, setDiagnostics] = React.useState({ status:null, health:null, ocr:{} });
 
   const refresh = React.useCallback(async () => setState(await window.tracker.getState()), []);
   React.useEffect(() => {
@@ -35,6 +36,15 @@ function App() {
     window.tracker.onProgress(progress => setState(s => ({...s, progress})));
     window.tracker.onDetectorState(info => setRunning(Boolean(info?.running)));
     window.tracker.onDetectorError(msg => setError(String(msg || 'Unknown detector error')));
+    window.tracker.onDetectorMessage(message => {
+      if (!message?.type) return;
+      setDiagnostics(current => {
+        if (message.type === 'status') return {...current, status:message};
+        if (message.type === 'capture-health') return {...current, health:message};
+        if (message.type === 'ocr-debug') return {...current, ocr:{...current.ocr, [message.zone || 'unknown']:message}};
+        return current;
+      });
+    });
     window.tracker.onUpdateStatus(update => setState(s => ({...s, update})));
     return () => window.removeEventListener('focus', onFocus);
   }, [refresh]);
@@ -85,12 +95,15 @@ function App() {
     return classMatch && (!q || w.name.toLowerCase().includes(q) || w.category.toLowerCase().includes(q));
   });
 
+  const healthZones = diagnostics.health?.zones || [];
+  const selectedMonitor = state.monitors?.[state.settings.monitorIndex];
+
   return <div className="shell">
     <aside className="sidebar">
       <div className="brand"><div className="logo">M4</div><div><h1>MW4 Camo Tracker</h1><p>Automatic screen tracker</p></div></div>
       {['dashboard','weapons','history','settings'].map(x => <button key={x} onClick={()=>setTab(x)} className={'nav '+(tab===x?'active':'')}>{x[0].toUpperCase()+x.slice(1)}</button>)}
       <div className="grow" />
-      <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{state.monitors?.[state.settings.monitorIndex]?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small><small>v{state.appVersion || '—'}</small></div>
+      <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{selectedMonitor?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small><small>v{state.appVersion || '—'}</small></div>
     </aside>
     <main>
       {tab==='dashboard' && <>
@@ -106,8 +119,19 @@ function App() {
         <div className="overallBar"><div style={{width:`${overallCompletionPct}%`}}></div></div>
         <div className="twoCol">
           <section className="card"><span className="eyebrow">RECENT</span><h3>Recent unlocks</h3><div className="list">{events.length ? events.slice(0,8).map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">Nothing detected yet.</p>}</div></section>
-          <section className="card"><span className="eyebrow">MISSED UNLOCK PROTECTION</span><h3>Automatic backfill</h3><p className="muted">If the next popup says Military Camo 5 but the tracker only had 1–3, it automatically fills Camo 4 as completed too.</p><div className="example"><span>Detected</span><b>MILITARY CAMO 5</b><span>Saved</span><b>1 → 5</b></div></section>
+          <section className="card"><span className="eyebrow">MISSED UNLOCK PROTECTION</span><h3>Automatic backfill</h3><p className="muted">If the next popup says Military Camo 5 but the tracker only had 1–3, it automatically fills Camo 4 as completed too. Special camos stay independent.</p><div className="example"><span>Detected</span><b>MILITARY CAMO 5</b><span>Saved</span><b>1 → 5</b></div></section>
         </div>
+        <section className="card">
+          <span className="eyebrow">CAPTURE DIAGNOSTICS</span><h3>What the detector can actually see</h3>
+          <p className="muted">Selected display: {selectedMonitor ? `${selectedMonitor.label} · ${selectedMonitor.size.width}×${selectedMonitor.size.height}` : 'Unknown'} · Source: {diagnostics.status?.monitorSource || 'waiting for detector'}</p>
+          <div className="list">
+            {healthZones.length ? healthZones.map(zone => {
+              const debug = diagnostics.ocr?.[zone.name];
+              const frameLooksAlive = Number(zone.stddev || 0) > 1;
+              return <div className="row" key={zone.name}><div><b>{zone.name}</b><span>{frameLooksAlive ? 'Frame data active' : 'Frame looks blank/static'} · mean {zone.mean} · detail {zone.stddev} · text activity {zone.activity}</span><small className="raw">OCR: {(debug?.rawText || zone.ocrText || 'nothing read yet').slice(0,220)}</small></div><small>{debug?.confidence ? `${Math.round(debug.confidence*100)}% OCR` : '—'}</small></div>;
+            }) : <p className="muted">Start watching and this section will update every few seconds. If both zones stay blank/static while COD is visible, the screen-capture method is the problem rather than the camo recognition.</p>}
+          </div>
+        </section>
       </>}
 
       {tab==='weapons' && <>
