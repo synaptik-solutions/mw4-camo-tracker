@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
 
@@ -120,9 +121,17 @@ function stopDetector() {
   mainWindow?.webContents.send('detector-state', { running: false });
 }
 
-function detectorExecutablePath() {
-  if (app.isPackaged) return path.join(process.resourcesPath, 'worker', 'detector.exe');
-  return path.join(__dirname, '..', 'worker-dist', 'detector.exe');
+function detectorCommand() {
+  const packagedExe = app.isPackaged
+    ? path.join(process.resourcesPath, 'worker', 'detector.exe')
+    : path.join(__dirname, '..', 'worker-dist', 'detector.exe');
+
+  if (fs.existsSync(packagedExe)) return { command: packagedExe, prefixArgs: [] };
+
+  // Development fallback only. The shipped installer always uses detector.exe.
+  const script = path.join(__dirname, '..', 'worker', 'detector.py');
+  if (process.platform === 'win32') return { command: 'py', prefixArgs: ['-3', script] };
+  return { command: 'python3', prefixArgs: [script] };
 }
 
 function startDetector() {
@@ -136,8 +145,9 @@ function startDetector() {
     return false;
   }
 
-  const exe = detectorExecutablePath();
+  const runner = detectorCommand();
   const args = [
+    ...runner.prefixArgs,
     '--left', String(display.bounds.x),
     '--top', String(display.bounds.y),
     '--width', String(display.bounds.width),
@@ -145,14 +155,9 @@ function startDetector() {
     '--fps', String(settings.scanFps || 4)
   ];
 
-  try {
-    detectorProcess = spawn(exe, args, { windowsHide: true });
-  } catch (error) {
-    mainWindow?.webContents.send('detector-error', `Could not start detector: ${error.message}`);
-    return false;
-  }
-
+  detectorProcess = spawn(runner.command, args, { windowsHide: true });
   let stdoutBuffer = '';
+
   detectorProcess.stdout.on('data', (chunk) => {
     stdoutBuffer += chunk.toString();
     let newline;
@@ -163,6 +168,7 @@ function startDetector() {
       try {
         const message = JSON.parse(line);
         if (message.type === 'unlock') saveUnlock(message);
+        else if (message.type === 'error') mainWindow?.webContents.send('detector-error', message.message || 'Detector error');
         else mainWindow?.webContents.send('detector-message', message);
       } catch (_) {}
     }
@@ -173,7 +179,9 @@ function startDetector() {
   });
 
   detectorProcess.on('error', (error) => {
-    mainWindow?.webContents.send('detector-error', error.message);
+    detectorProcess = null;
+    mainWindow?.webContents.send('detector-state', { running: false });
+    mainWindow?.webContents.send('detector-error', `Could not start detector: ${error.message}`);
   });
 
   detectorProcess.on('exit', (code) => {
@@ -196,7 +204,13 @@ app.whenReady().then(() => {
   }));
 
   ipcMain.handle('save-settings', (_, settings) => {
-    store.set('settings', settings);
+    const safeSettings = {
+      monitorIndex: Number.isInteger(settings.monitorIndex) ? settings.monitorIndex : 1,
+      scanFps: [2, 4, 6].includes(Number(settings.scanFps)) ? Number(settings.scanFps) : 4,
+      overlay: Boolean(settings.overlay),
+      autoStart: Boolean(settings.autoStart)
+    };
+    store.set('settings', safeSettings);
     if (detectorProcess) startDetector();
     return { ok: true };
   });
