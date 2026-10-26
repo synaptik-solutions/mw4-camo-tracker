@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('tracker', {
   startDetector: () => ipcRenderer.invoke('start-detector'),
   stopDetector: () => ipcRenderer.invoke('stop-detector'),
   clearProgress: () => ipcRenderer.invoke('clear-progress'),
+  setCamoStatus: (weapon, camo, complete) => ipcRenderer.invoke('set-camo-status', weapon, camo, complete),
   testUnlock: (event) => ipcRenderer.invoke('test-unlock', event),
   onProgress: (callback) => ipcRenderer.on('progress-updated', (_, data) => callback(data)),
   onDetectorState: (callback) => ipcRenderer.on('detector-state', (_, data) => callback(data)),
