@@ -1,6 +1,16 @@
 const React = require('react');
 const { createRoot } = require('react-dom/client');
-const { weapons: catalogWeapons, categories, globalCamos, allCamosForWeapon, pending } = require('./camoCatalog');
+const { weapons: catalogWeapons, categories, globalCamos: baseGlobalCamos, allCamosForWeapon, pending } = require('./camoCatalog');
+
+const globalCamos = [
+  ...baseGlobalCamos,
+  { name:'Chiral', type:'DMZ Mastery', requirement:'Get 2,500 kills on Tier 3 or higher enemies' },
+  { name:'Ripple Tide', type:'DMZ Mastery', requirement:'Exfil with 2 LT dog tags in a single deployment 50 times' },
+  { name:'Helio', type:'DMZ Mastery', requirement:'Get 25,000 kills with Legendary weapons while playing a max-level Operator' },
+  { name:'Parallax', type:'Warzone Mastery', requirement:'Classified until Season 1' },
+  { name:'Damascus Reforged', type:'Warzone Mastery', requirement:'Classified until Season 1' },
+  { name:'Empyros', type:'Warzone Mastery', requirement:'Classified until Season 1' }
+];
 
 function fmtTime(ts) {
   if (!ts) return '—';
@@ -99,7 +109,7 @@ function App() {
           })}
         </div>
         <section className="card globalSection"><span className="eyebrow">ENDGAME / PRESTIGE</span><h3>Divergence, Mastery & Prestige</h3><p className="muted">These sit outside the 14-camo weapon boards. Check them manually as you earn them.</p><div className="globalGrid">{globalCamos.map(c=>{const done=globalUnlocks.includes(key(c.name));return <label className={'globalCamo '+(done?'done':'')} key={c.name}><input type="checkbox" checked={done} onChange={e=>toggleGlobal(c.name,e.target.checked)}/><div><b>{c.name}</b><small>{c.type}</small><p>{c.requirement}</p></div></label>;})}</div></section>
-        <p className="sourceNote">Military camos unlock by weapon level. Special and completionist rows show Multiplayer requirements; DMZ alternatives are shown underneath when available.</p>
+        <p className="sourceNote">Military camos unlock by weapon level. Special and completionist rows show Multiplayer requirements; DMZ alternatives are shown underneath when available. Warzone mastery challenges remain classified until Season 1.</p>
       </>}
 
       {tab==='history' && <><header><div><span className="eyebrow">EVENT LOG</span><h2>History</h2><p>Latest detector events stored locally on this PC.</p></div></header><section className="card"><div className="list">{events.length ? events.map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span><small className="raw">{e.rawText || ''}</small></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">No history yet.</p>}</div></section></>}
