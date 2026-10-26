@@ -19,7 +19,7 @@ function fmtTime(ts) {
 function key(value) { return String(value || '').trim().toUpperCase(); }
 
 function App() {
-  const [state, setState] = React.useState({ settings:{ monitorIndex:1, scanFps:4, overlay:true, autoStart:true }, progress:{ weapons:{}, events:[] }, monitors:[] });
+  const [state, setState] = React.useState({ settings:{ monitorIndex:1, scanFps:4, overlay:true, autoStart:true }, progress:{ weapons:{}, events:[] }, monitors:[], appVersion:'', update:{ status:'idle', percent:0, message:'' } });
   const [running, setRunning] = React.useState(false);
   const [error, setError] = React.useState('');
   const [tab, setTab] = React.useState('dashboard');
@@ -33,11 +33,13 @@ function App() {
     window.tracker.onProgress(progress => setState(s => ({...s, progress})));
     window.tracker.onDetectorState(info => setRunning(Boolean(info?.running)));
     window.tracker.onDetectorError(msg => setError(String(msg || 'Unknown detector error')));
+    window.tracker.onUpdateStatus(update => setState(s => ({...s, update})));
   }, [refresh]);
 
   const progress = state.progress || { weapons:{}, events:[] };
   const events = progress.events || [];
   const latest = events[0];
+  const update = state.update || { status:'idle', percent:0, message:'' };
 
   function weaponProgress(w) {
     const aliases = [w.name, ...(w.aliases || [])].map(key);
@@ -73,7 +75,7 @@ function App() {
       <div className="brand"><div className="logo">M4</div><div><h1>MW4 Camo Tracker</h1><p>Automatic screen tracker</p></div></div>
       {['dashboard','weapons','history','settings'].map(x => <button key={x} onClick={()=>setTab(x)} className={'nav '+(tab===x?'active':'')}>{x[0].toUpperCase()+x.slice(1)}</button>)}
       <div className="grow" />
-      <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{state.monitors?.[state.settings.monitorIndex]?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small></div>
+      <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{state.monitors?.[state.settings.monitorIndex]?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small><small>v{state.appVersion || '—'}</small></div>
     </aside>
     <main>
       {tab==='dashboard' && <>
@@ -115,6 +117,7 @@ function App() {
       {tab==='history' && <><header><div><span className="eyebrow">EVENT LOG</span><h2>History</h2><p>Latest detector events stored locally on this PC.</p></div></header><section className="card"><div className="list">{events.length ? events.map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span><small className="raw">{e.rawText || ''}</small></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">No history yet.</p>}</div></section></>}
 
       {tab==='settings' && <><header><div><span className="eyebrow">CONFIGURATION</span><h2>Settings</h2><p>Defaults are tuned to stay lightweight while you game.</p></div></header><section className="card settings">
+        <div className="powerNote"><b>Program updates · v{state.appVersion || '—'}</b><p>{update.message || 'Check GitHub for a newer tracker build.'}</p>{update.status==='downloading' && <div className="overallBar"><div style={{width:`${update.percent || 0}%`}}></div></div>}<div className="buttons">{!['downloading','ready'].includes(update.status) && <button className="primary" onClick={()=>window.tracker.checkForUpdates()}>Check for updates</button>}{update.status==='available' && <button className="primary" onClick={()=>window.tracker.downloadUpdate()}>Download update</button>}{update.status==='ready' && <button className="primary" onClick={()=>window.tracker.installUpdate()}>Restart & install</button>}</div></div>
         <label>Capture display<select value={state.settings.monitorIndex ?? 1} onChange={e=>saveSettings({monitorIndex:Number(e.target.value)})}>{(state.monitors||[]).map(m=><option key={m.index} value={m.index}>{m.label} — {m.size.width}×{m.size.height}{m.primary?' (Primary)':''}</option>)}</select></label>
         <label>Screen checks per second<select value={state.settings.scanFps || 4} onChange={e=>saveSettings({scanFps:Number(e.target.value)})}><option value="2">2 — lowest power</option><option value="4">4 — recommended</option><option value="6">6 — faster detection</option></select></label>
         <label className="toggle"><input type="checkbox" checked={Boolean(state.settings.overlay)} onChange={e=>saveSettings({overlay:e.target.checked})}/><span>Show small unlock overlay</span></label>
