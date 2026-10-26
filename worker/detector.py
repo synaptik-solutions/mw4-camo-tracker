@@ -136,14 +136,37 @@ def main():
             monitor = dict(sct.monitors[1])
             monitor_source = "mss-1-fallback"
 
-        # Narrow notification-only capture area. This is intentionally much smaller
-        # than the previous right-half scan to minimize memory bandwidth and OCR cost.
+        # The selected display from Settings is the coordinate reference. Electron passes
+        # its displayed width/height here. We calculate the watch box in that coordinate
+        # system, then scale it onto MSS' physical capture surface. This keeps the same
+        # relative location across 1080p, 1440p, ultrawide, and DPI scaling differences.
+        reference_width = int(args.width or monitor["width"])
+        reference_height = int(args.height or monitor["height"])
+        scale_x = float(monitor["width"]) / float(max(reference_width, 1))
+        scale_y = float(monitor["height"]) / float(max(reference_height, 1))
+
+        # Current universal watch box. Coordinates are percentages of the selected screen.
+        # These can be refined from recorded footage without becoming resolution-specific.
+        x_pct = 0.52
+        y_pct = 0.04
+        w_pct = 0.47
+        h_pct = 0.62
+
+        ref_left = int(reference_width * x_pct)
+        ref_top = int(reference_height * y_pct)
+        ref_width = max(360, int(reference_width * w_pct))
+        ref_height = max(320, int(reference_height * h_pct))
+
         region = {
-            "left": monitor["left"] + int(monitor["width"] * 0.52),
-            "top": monitor["top"] + int(monitor["height"] * 0.04),
-            "width": max(360, int(monitor["width"] * 0.47)),
-            "height": max(320, int(monitor["height"] * 0.62)),
+            "left": monitor["left"] + int(ref_left * scale_x),
+            "top": monitor["top"] + int(ref_top * scale_y),
+            "width": min(monitor["width"], max(1, int(ref_width * scale_x))),
+            "height": min(monitor["height"], max(1, int(ref_height * scale_y))),
         }
+
+        # Clamp the scaled box so it can never extend off the physical capture surface.
+        region["width"] = min(region["width"], monitor["left"] + monitor["width"] - region["left"])
+        region["height"] = min(region["height"], monitor["top"] + monitor["height"] - region["top"])
 
         emit({
             "type": "status",
@@ -151,6 +174,9 @@ def main():
             "monitor": args.monitor,
             "monitorSource": monitor_source,
             "monitorBounds": monitor,
+            "settingsResolution": {"width": reference_width, "height": reference_height},
+            "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)},
+            "regionPercent": {"x": x_pct, "y": y_pct, "width": w_pct, "height": h_pct},
             "region": region,
             "fps": fps,
         })
@@ -215,10 +241,10 @@ def main():
 
                 if event:
                     event["confidence"] = round(confidence, 3)
-                    key = (event.get("weapon"), event.get("family"), event.get("number"), event.get("camo"))
-                    if key != last_event_key or (now - last_event_time) > 8.0:
+                    event_key = (event.get("weapon"), event.get("family"), event.get("number"), event.get("camo"))
+                    if event_key != last_event_key or (now - last_event_time) > 8.0:
                         emit(event)
-                        last_event_key = key
+                        last_event_key = event_key
                         last_event_time = now
 
             if (now - last_health) >= 8.0:
@@ -228,6 +254,7 @@ def main():
                     "stddev": round(float(np.std(gray)), 2),
                     "activity": round(activity, 5),
                     "monitor": args.monitor,
+                    "settingsResolution": {"width": reference_width, "height": reference_height},
                     "timestamp": utc_now(),
                 })
                 last_health = now
