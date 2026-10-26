@@ -4,7 +4,7 @@ const fs = require('fs');
 const { spawn, execFile } = require('child_process');
 const Store = require('electron-store');
 const { autoUpdater } = require('electron-updater');
-const { weapons: camoWeapons } = require('./camoCatalog');
+const { weapons: camoWeapons, allCamosForWeapon } = require('./camoCatalog');
 
 const store = new Store({ defaults: { settings: { monitorIndex: 1, scanFps: 4, overlay: true, autoStart: true }, progress: { weapons: {}, events: [] } } });
 let mainWindow, overlayWindow, watchBadgeWindow, detectorProcess, lastOverlayTimer;
@@ -28,6 +28,11 @@ function configureUpdater(){
 const weaponAliases=new Map();
 for(const item of camoWeapons) for(const alias of [item.name,...(item.aliases||[])]) weaponAliases.set(String(alias).trim().toUpperCase(),item.name.toUpperCase());
 function canonicalWeaponName(value){ const raw=String(value||'UNKNOWN').trim().toUpperCase(); return weaponAliases.get(raw)||raw; }
+function key(value){ return String(value||'').trim().toUpperCase(); }
+function catalogWeaponFor(value){
+  const wanted=canonicalWeaponName(value);
+  return camoWeapons.find(item=>canonicalWeaponName(item.name)===wanted)||null;
+}
 
 function destroyAuxWindows(){
   clearTimeout(lastOverlayTimer);
@@ -55,6 +60,10 @@ function createOverlayWindow(){
   overlayWindow=new BrowserWindow({width:410,height:116,frame:false,transparent:true,alwaysOnTop:true,resizable:false,skipTaskbar:true,focusable:false,show:false,webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false}});
   overlayWindow.setIgnoreMouseEvents(true); overlayWindow.loadFile(path.join(__dirname,'overlay.html'));
 }
+function positionOverlay(display){
+  if(!display||!overlayWindow||overlayWindow.isDestroyed()) return;
+  overlayWindow.setBounds({x:display.bounds.x+display.bounds.width-410-18,y:display.bounds.y+42,width:410,height:116});
+}
 function showWatchBadge(display){
   if(!display) return;
   if(!watchBadgeWindow||watchBadgeWindow.isDestroyed()){
@@ -71,16 +80,53 @@ function hideWatchBadge(){ if(watchBadgeWindow&&!watchBadgeWindow.isDestroyed())
 
 function getMonitors(){ const primaryId=screen.getPrimaryDisplay().id; return screen.getAllDisplays().map((display,index)=>({index,label:`Monitor ${index+1}`,bounds:display.bounds,size:display.size,scaleFactor:display.scaleFactor,primary:display.id===primaryId})); }
 function normalizeEvent(event){ return {type:event.type||'unlock',weapon:canonicalWeaponName(event.weapon),family:event.family?String(event.family).trim().toUpperCase():null,number:Number.isInteger(event.number)?event.number:null,camo:event.camo?String(event.camo).trim().toUpperCase():null,rawText:event.rawText||'',confidence:typeof event.confidence==='number'?event.confidence:null,timestamp:event.timestamp||new Date().toISOString()}; }
-function getWeaponProgress(progress,weaponName){ const key=canonicalWeaponName(weaponName); const current=progress.weapons[key]||{unlocks:[],lastSeen:null}; current.unlocks=Array.isArray(current.unlocks)?current.unlocks.map(x=>String(x).toUpperCase()):[]; return {key,current}; }
+function getWeaponProgress(progress,weaponName){ const keyName=canonicalWeaponName(weaponName); const current=progress.weapons[keyName]||{unlocks:[],lastSeen:null}; current.unlocks=Array.isArray(current.unlocks)?current.unlocks.map(x=>String(x).toUpperCase()):[]; return {key:keyName,current}; }
 function broadcastProgress(progress){ store.set('progress',progress); mainWindow?.webContents.send('progress-updated',progress); }
 function saveUnlock(rawEvent){
-  const event=normalizeEvent(rawEvent),progress=store.get('progress'),{key,current:weapon}=getWeaponProgress(progress,event.weapon);
+  const event=normalizeEvent(rawEvent),progress=store.get('progress'),{key:keyName,current:weapon}=getWeaponProgress(progress,event.weapon);
   if(event.family&&Number.isInteger(event.number)&&event.number>0){ const family=event.family.includes('MILITARY')?'MILITARY CAMO':event.family; for(let n=1;n<=event.number;n++){ const token=`${family} ${n}`; if(!weapon.unlocks.includes(token)) weapon.unlocks.push(token); } }
   else if(event.camo&&!weapon.unlocks.includes(event.camo)) weapon.unlocks.push(event.camo);
-  weapon.lastSeen=event.timestamp; progress.weapons[key]=weapon; progress.events.unshift({...event,weapon:key}); progress.events=progress.events.slice(0,300); broadcastProgress(progress); mainWindow?.webContents.send('detector-event',{...event,weapon:key});
-  if(overlayWindow&&store.get('settings.overlay')){ overlayWindow.webContents.send('overlay-event',{...event,weapon:key}); overlayWindow.showInactive(); clearTimeout(lastOverlayTimer); lastOverlayTimer=setTimeout(()=>{ if(overlayWindow&&!overlayWindow.isDestroyed()) overlayWindow.hide(); },4500); }
+  weapon.lastSeen=event.timestamp; progress.weapons[keyName]=weapon; progress.events.unshift({...event,weapon:keyName}); progress.events=progress.events.slice(0,300); broadcastProgress(progress); mainWindow?.webContents.send('detector-event',{...event,weapon:keyName});
+  if(overlayWindow&&store.get('settings.overlay')){
+    const settings=store.get('settings');
+    const monitors=getMonitors();
+    const display=monitors[settings.monitorIndex]||monitors[1]||monitors[0];
+    positionOverlay(display);
+    overlayWindow.webContents.send('overlay-event',{...event,weapon:keyName});
+    overlayWindow.showInactive();
+    clearTimeout(lastOverlayTimer);
+    lastOverlayTimer=setTimeout(()=>{ if(overlayWindow&&!overlayWindow.isDestroyed()) overlayWindow.hide(); },4500);
+  }
 }
-function setCamoStatus(weaponName,camoName,complete){ const progress=store.get('progress'),{key,current}=getWeaponProgress(progress,weaponName),token=String(camoName||'').trim().toUpperCase(); if(!token) return {ok:false}; const has=current.unlocks.includes(token); if(complete&&!has) current.unlocks.push(token); if(!complete&&has) current.unlocks=current.unlocks.filter(x=>x!==token); current.lastSeen=current.lastSeen||new Date().toISOString(); progress.weapons[key]=current; broadcastProgress(progress); return {ok:true}; }
+function setCamoStatus(weaponName,camoName,complete){
+  const progress=store.get('progress'),{key:keyName,current}=getWeaponProgress(progress,weaponName),token=key(camoName);
+  if(!token) return {ok:false};
+
+  if(complete){
+    const catalogWeapon=catalogWeaponFor(weaponName);
+    const ordered=catalogWeapon?allCamosForWeapon(catalogWeapon):[];
+    const clickedIndex=ordered.findIndex(item=>key(item.name)===token);
+    const items=clickedIndex>=0?ordered.slice(0,clickedIndex+1):[{name:camoName}];
+    for(const item of items){
+      const itemToken=key(item.name);
+      if(itemToken&&!current.unlocks.includes(itemToken)) current.unlocks.push(itemToken);
+    }
+  }else{
+    current.unlocks=current.unlocks.filter(x=>x!==token);
+    const numbered=token.match(/^(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE) CAMO (\d+)$/);
+    progress.events=(progress.events||[]).filter(evt=>{
+      if(canonicalWeaponName(evt.weapon)!==keyName) return true;
+      if(key(evt.camo)===token) return false;
+      if(numbered&&key(evt.family)===`${numbered[1]} CAMO`&&Number(evt.number)===Number(numbered[2])) return false;
+      return true;
+    });
+  }
+
+  current.lastSeen=current.lastSeen||new Date().toISOString();
+  progress.weapons[keyName]=current;
+  broadcastProgress(progress);
+  return {ok:true};
+}
 function stopDetector(){
   const proc=detectorProcess;
   detectorProcess=null;
