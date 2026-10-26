@@ -15,9 +15,7 @@ CAMO_RE = re.compile(r"\b([A-Z][A-Z0-9' .\-]{2,30})\s+CAMO\b", re.I)
 
 
 def emit(payload):
-    # Keep the stdout JSON stream ASCII-only so Windows' legacy console/code-page
-    # encoding can never crash on OCR text containing Unicode characters.
-    # JSON.parse in Electron restores the original Unicode text automatically.
+    # Keep stdout ASCII-safe on Windows. Electron's JSON.parse restores Unicode.
     print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
@@ -27,9 +25,9 @@ def utc_now():
 
 def normalize_ocr_line(text):
     text = re.sub(r"\s+", " ", str(text or "").strip())
-    # Common OCR confusions seen in compact HUD text.
     text = re.sub(r"\bCAM0\b", "CAMO", text, flags=re.I)
     text = re.sub(r"\bUNL0CKED\b", "UNLOCKED", text, flags=re.I)
+    text = re.sub(r"\bUNLOCKE[D0]\b", "UNLOCKED", text, flags=re.I)
     return text
 
 
@@ -41,14 +39,12 @@ def parse_text(lines):
 
     joined = " | ".join(clean)
     upper = [x.upper() for x in clean]
-
-    # Be tolerant of OCR dropping one or two letters from UNLOCKED.
     unlock_idx = next((i for i, x in enumerate(upper) if "UNLOCK" in x or "NLOCK" in x), None)
     if unlock_idx is None:
         return None
 
     weapon = None
-    for candidate in upper[unlock_idx + 1:unlock_idx + 5]:
+    for candidate in upper[unlock_idx + 1:unlock_idx + 6]:
         if "CAMO" not in candidate and len(candidate) >= 2:
             weapon = candidate
             break
@@ -66,6 +62,8 @@ def parse_text(lines):
                 "timestamp": utc_now(),
             }
 
+    # Some MW4 popups show the camo title by itself after UNLOCKED instead of '<name> CAMO'.
+    # If we saw UNLOCKED and a plausible weapon, keep looking for a later title line.
     for line in upper:
         m = CAMO_RE.search(line)
         if m and not any(x in line for x in ("MILITARY", "SPECIAL", "COMPLETIONIST", "PRESTIGE")):
@@ -97,7 +95,7 @@ def ocr_lines(ocr, image):
     result, _ = ocr(image)
     if not result:
         return [], 0.0
-    good = [item for item in result if len(item) >= 3 and float(item[2]) >= 0.32]
+    good = [item for item in result if len(item) >= 3 and float(item[2]) >= 0.26]
     lines = [item[1] for item in good]
     confidence = float(np.mean([item[2] for item in good])) if good else 0.0
     return lines, confidence
@@ -105,36 +103,57 @@ def ocr_lines(ocr, image):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--left", type=int, required=True)
-    p.add_argument("--top", type=int, required=True)
-    p.add_argument("--width", type=int, required=True)
-    p.add_argument("--height", type=int, required=True)
+    p.add_argument("--monitor", type=int, default=0, help="1-based MSS monitor index")
+    p.add_argument("--left", type=int)
+    p.add_argument("--top", type=int)
+    p.add_argument("--width", type=int)
+    p.add_argument("--height", type=int)
     p.add_argument("--fps", type=float, default=4.0)
     args = p.parse_args()
 
     fps = min(max(args.fps, 1.0), 8.0)
     interval = 1.0 / fps
 
-    # Capture most of the right half of the display. This is intentionally
-    # percentage-based so it works at both 1080p and 1440p without hardcoded coords.
-    region = {
-        "left": args.left + int(args.width * 0.45),
-        "top": args.top,
-        "width": max(320, int(args.width * 0.54)),
-        "height": max(300, int(args.height * 0.95)),
-    }
-
     ocr = RapidOCR(det_use_dilation=True)
     last_fp = None
     baseline_activity = None
     last_ocr = 0.0
     last_debug = 0.0
+    last_health = 0.0
     last_event_key = None
     last_event_time = 0.0
 
-    emit({"type": "status", "message": "detector-ready", "region": region, "fps": fps})
-
     with mss.mss() as sct:
+        # Prefer MSS' own physical monitor geometry. This avoids Electron DPI/logical-coordinate
+        # mismatches on multi-monitor Windows systems.
+        if 1 <= args.monitor < len(sct.monitors):
+            monitor = dict(sct.monitors[args.monitor])
+            monitor_source = f"mss-{args.monitor}"
+        elif None not in (args.left, args.top, args.width, args.height):
+            monitor = {"left": args.left, "top": args.top, "width": args.width, "height": args.height}
+            monitor_source = "electron-fallback"
+        else:
+            monitor = dict(sct.monitors[1])
+            monitor_source = "mss-1-fallback"
+
+        # Cover the whole notification side of the monitor, not only the far-right edge.
+        region = {
+            "left": monitor["left"] + int(monitor["width"] * 0.34),
+            "top": monitor["top"],
+            "width": max(480, int(monitor["width"] * 0.66)),
+            "height": monitor["height"],
+        }
+
+        emit({
+            "type": "status",
+            "message": "detector-ready",
+            "monitor": args.monitor,
+            "monitorSource": monitor_source,
+            "monitorBounds": monitor,
+            "region": region,
+            "fps": fps,
+        })
+
         while True:
             started = time.perf_counter()
             frame = np.asarray(sct.grab(region), dtype=np.uint8)
@@ -154,41 +173,41 @@ def main():
             last_fp = fp
 
             now = time.monotonic()
-            can_ocr = (now - last_ocr) >= 0.70
+            activity_spike = activity > (baseline_activity + 0.0012)
+            visual_change = mean_delta >= 1.35
+            strong_change = mean_delta >= 2.6
 
-            # Previous version required a bright-text spike AND frame change. MW4's
-            # translucent popup can fail that gate. Now a meaningful visual change is
-            # enough; the text signal only helps catch subtler popups.
-            activity_spike = activity > (baseline_activity + 0.0015)
-            visual_change = mean_delta >= 1.65
-            strong_change = mean_delta >= 3.0
-            should_ocr = can_ocr and (visual_change or activity_spike)
+            # Guaranteed heartbeat OCR means a short popup is still sampled even if the
+            # change detector misses it. Visual changes allow a faster burst scan.
+            heartbeat_due = (now - last_ocr) >= 1.05
+            burst_due = (now - last_ocr) >= 0.42 and (visual_change or activity_spike)
+            should_ocr = heartbeat_due or burst_due
 
             if should_ocr:
                 last_ocr = now
-
-                # OCR the whole right-side region first.
-                upscaled = cv2.resize(bgr, None, fx=1.35, fy=1.35, interpolation=cv2.INTER_CUBIC)
+                upscaled = cv2.resize(bgr, None, fx=1.32, fy=1.32, interpolation=cv2.INTER_CUBIC)
                 lines, confidence = ocr_lines(ocr, upscaled)
                 event = parse_text(lines)
 
-                # If the broad pass misses, try the upper/right notification-heavy area
-                # with contrast enhancement. This costs extra only after a likely popup.
-                if not event and (strong_change or activity_spike):
+                # Second pass on the upper/right notification-heavy area with local contrast.
+                if not event and (strong_change or activity_spike or heartbeat_due):
                     h, w = bgr.shape[:2]
-                    focus = bgr[0:int(h * 0.72), int(w * 0.18):w]
+                    focus = bgr[0:int(h * 0.82), int(w * 0.10):w]
                     focus_gray = cv2.cvtColor(focus, cv2.COLOR_BGR2GRAY)
-                    focus_gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(focus_gray)
+                    focus_gray = cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(focus_gray)
                     focus_up = cv2.resize(focus_gray, None, fx=1.55, fy=1.55, interpolation=cv2.INTER_CUBIC)
                     focus_lines, focus_conf = ocr_lines(ocr, focus_up)
                     if focus_lines:
-                        lines = focus_lines
+                        # Merge rather than replace so UNLOCKED/weapon/title split across passes survives.
+                        merged = list(lines)
+                        for value in focus_lines:
+                            if value not in merged:
+                                merged.append(value)
+                        lines = merged
                         confidence = max(confidence, focus_conf)
-                        event = parse_text(focus_lines)
+                        event = parse_text(lines)
 
-                # Send occasional diagnostics to the app even when parsing fails.
-                # This lets us see whether OCR is waking up without spamming the UI.
-                if lines and (now - last_debug) >= 2.0:
+                if lines and (now - last_debug) >= 1.5:
                     emit({
                         "type": "ocr-debug",
                         "rawText": " | ".join(normalize_ocr_line(x) for x in lines),
@@ -205,6 +224,18 @@ def main():
                         emit(event)
                         last_event_key = key
                         last_event_time = now
+
+            # Health telemetry catches black/blank or wrong-monitor capture quickly.
+            if (now - last_health) >= 5.0:
+                emit({
+                    "type": "capture-health",
+                    "mean": round(float(np.mean(gray)), 2),
+                    "stddev": round(float(np.std(gray)), 2),
+                    "activity": round(activity, 5),
+                    "monitor": args.monitor,
+                    "timestamp": utc_now(),
+                })
+                last_health = now
 
             elapsed = time.perf_counter() - started
             if elapsed < interval:
