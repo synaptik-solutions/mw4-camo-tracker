@@ -5,6 +5,13 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
+concurrency:
+  group: mw4-windows-release
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -49,10 +56,23 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
 
-      - name: Upload installer
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: MW4-Camo-Tracker-Windows-${{ env.APP_VERSION }}
           path: dist/*.exe
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish app update release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          $assets = @()
+          $assets += Get-ChildItem dist -Filter "*.exe" | ForEach-Object { $_.FullName }
+          $assets += Get-ChildItem dist -Filter "*.blockmap" | ForEach-Object { $_.FullName }
+          if (Test-Path "dist/latest.yml") { $assets += (Resolve-Path "dist/latest.yml").Path }
+          if ($assets.Count -lt 2) { throw "Updater metadata was not generated." }
+          gh release create $tag @assets --title "MW4 Camo Tracker $env:APP_VERSION" --notes "Automatic program update build $env:APP_VERSION" --latest
