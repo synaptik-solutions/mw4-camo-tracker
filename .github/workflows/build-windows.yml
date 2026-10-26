@@ -15,14 +15,14 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: npm
+          node-version: '22'
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
+          cache-dependency-path: worker/requirements.txt
 
       - name: Install Python dependencies
         run: |
