@@ -5,35 +5,27 @@
   "description": "Read-only MW4 automatic camo tracker for Windows",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "build:renderer": "esbuild src/renderer.jsx --bundle --platform=browser --outfile=src/renderer.bundle.js --define:process.env.NODE_ENV=\"'production'\"",
+    "start": "npm run build:renderer && electron .",
+    "dist": "npm run build:renderer && electron-builder --win nsis"
   },
   "dependencies": {
-    "electron-store": "^8.2.0"
+    "electron-store": "^8.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "esbuild": "^0.24.0"
   },
   "build": {
     "appId": "com.synaptik.mw4camotracker",
     "productName": "MW4 Camo Tracker",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "worker-dist/detector.exe",
-        "to": "worker/detector.exe"
-      }
-    ],
-    "win": {
-      "target": ["nsis"]
-    },
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "package.json"],
+    "extraResources": [{ "from": "worker-dist/detector.exe", "to": "worker/detector.exe" }],
+    "win": { "target": ["nsis"] },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
