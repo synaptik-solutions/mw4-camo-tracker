@@ -1,8 +1,10 @@
 import argparse
+import difflib
 import json
 import re
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 import cv2
@@ -10,11 +12,18 @@ import mss
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 
-UNLOCK_RE = re.compile(r"\b(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE)\s+CAMO\s+(\d+)\b", re.I)
+UNLOCK_RE = re.compile(r"\b(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE)\s+CAMO\s*#?\s*(\d+)\b", re.I)
 CAMO_RE = re.compile(r"\b([A-Z][A-Z0-9' .\-]{2,30})\s+CAMO\b", re.I)
 DEFAULT_ZONES = [
     {"name": "upper-right", "x": 0.58, "y": 0.05, "width": 0.40, "height": 0.40},
     {"name": "center", "x": 0.27, "y": 0.25, "width": 0.46, "height": 0.50},
+]
+KNOWN_WEAPONS = [
+    "Axion", "Han 86", "M4", "Hyeon Burst", "Kastov 762", "Patriot XMR", "Oden", "Cronen Squall",
+    "Wz.55 Striga", "ISO Nightshade", "PPSh-41", "X-58 Nyx", "VEL 46", "REZI 12", "Warlord",
+    "FiNN LMG", "Type 73", "APOC-338", "MAR-9", "Oris 8.6", "Mosin-Nagant", "KG-7 Vulcan",
+    "Signal 50", "Astaroth .57", "Sang 9mm", "Krait P68", ".50 GS", "Mojave .357", "PILA", "RPG-8",
+    "JOKR", "PM-40 Anvil", "FSS Carbon Edge 1095",
 ]
 
 
@@ -28,55 +37,65 @@ def utc_now():
 
 def normalize_ocr_line(text):
     text = re.sub(r"\s+", " ", str(text or "").strip())
-    text = re.sub(r"\bCAM0\b", "CAMO", text, flags=re.I)
-    text = re.sub(r"\bUNL0CKED\b", "UNLOCKED", text, flags=re.I)
-    text = re.sub(r"\bUNLOCKE[D0]\b", "UNLOCKED", text, flags=re.I)
+    for pattern, value in [
+        (r"\bCAM[0O]\b", "CAMO"),
+        (r"\bUNL[0O]CKE[D0]?\b", "UNLOCKED"),
+        (r"\bMIL1TARY\b", "MILITARY"),
+        (r"\bMILITAR[VY]\b", "MILITARY"),
+        (r"\bSPEC1AL\b", "SPECIAL"),
+        (r"\bC[0O]MPLETI[0O]NIST\b", "COMPLETIONIST"),
+        (r"\bPREST1GE\b", "PRESTIGE"),
+    ]:
+        text = re.sub(pattern, value, text, flags=re.I)
     return text
 
 
-def parse_text(lines):
+def compact_text(text):
+    return re.sub(r"[^A-Z0-9]+", "", normalize_ocr_line(text).upper())
+
+
+def fuzzy_weapon(lines):
+    best_name, best_score = None, 0.0
+    for raw in lines:
+        candidate = normalize_ocr_line(raw).strip(" -|:[]()")
+        upper = candidate.upper()
+        if not candidate or "CAMO" in upper or "UNLOCK" in upper or len(candidate) > 45:
+            continue
+        comp = compact_text(candidate)
+        if len(comp) < 2:
+            continue
+        for weapon in KNOWN_WEAPONS:
+            score = difflib.SequenceMatcher(None, comp, compact_text(weapon)).ratio()
+            if score > best_score:
+                best_name, best_score = weapon, score
+    return best_name if best_score >= 0.58 else None
+
+
+def parse_candidate(lines):
     clean = [normalize_ocr_line(x) for x in lines if x and str(x).strip()]
     clean = [x for x in clean if x]
     if not clean:
         return None
-
     joined = " | ".join(clean)
-    upper = [x.upper() for x in clean]
-    unlock_idx = next((i for i, x in enumerate(upper) if "UNLOCK" in x or "NLOCK" in x), None)
-    if unlock_idx is None:
-        return None
+    compact = re.sub(r"[^A-Z0-9]+", " ", joined.upper())
+    compact = normalize_ocr_line(compact).upper()
+    weapon = fuzzy_weapon(clean) or "UNKNOWN"
 
-    weapon = None
-    for candidate in upper[unlock_idx + 1:unlock_idx + 6]:
-        if "CAMO" not in candidate and len(candidate) >= 2:
-            weapon = candidate
-            break
+    # Intentionally do not require the small UNLOCKED header; OCR often misses it.
+    match = UNLOCK_RE.search(compact)
+    if match:
+        return {
+            "kind": "family",
+            "weapon": weapon,
+            "family": f"{match.group(1).upper()} CAMO",
+            "number": int(match.group(2)),
+            "rawText": joined,
+        }
 
-    for line in upper:
-        m = UNLOCK_RE.search(line)
-        if m:
-            return {
-                "type": "unlock",
-                "weapon": weapon or "UNKNOWN",
-                "family": f"{m.group(1).upper()} CAMO",
-                "number": int(m.group(2)),
-                "camo": None,
-                "rawText": joined,
-                "timestamp": utc_now(),
-            }
-
-    for line in upper:
-        m = CAMO_RE.search(line)
-        if m and not any(x in line for x in ("MILITARY", "SPECIAL", "COMPLETIONIST", "PRESTIGE")):
-            return {
-                "type": "unlock",
-                "weapon": weapon or "UNKNOWN",
-                "family": None,
-                "number": None,
-                "camo": m.group(1).strip(),
-                "rawText": joined,
-                "timestamp": utc_now(),
-            }
+    for line in [x.upper() for x in clean]:
+        match = CAMO_RE.search(line)
+        if match and not any(x in line for x in ("MILITARY", "SPECIAL", "COMPLETIONIST", "PRESTIGE")):
+            return {"kind": "named", "weapon": weapon, "camo": match.group(1).strip(), "rawText": joined}
     return None
 
 
@@ -86,18 +105,16 @@ def fingerprint(gray):
 
 def text_activity(gray):
     small = cv2.resize(gray, (140, 79), interpolation=cv2.INTER_AREA)
-    _, bright = cv2.threshold(small, 190, 255, cv2.THRESH_BINARY)
+    _, bright = cv2.threshold(small, 185, 255, cv2.THRESH_BINARY)
     return float(np.count_nonzero(bright)) / float(bright.size)
 
 
-def ocr_lines(ocr, image):
+def ocr_lines(ocr, image, min_conf=0.15):
     result, _ = ocr(image)
     if not result:
         return [], 0.0
-    good = [item for item in result if len(item) >= 3 and float(item[2]) >= 0.22]
-    lines = [item[1] for item in good]
-    confidence = float(np.mean([item[2] for item in good])) if good else 0.0
-    return lines, confidence
+    good = [item for item in result if len(item) >= 3 and float(item[2]) >= min_conf]
+    return [item[1] for item in good], float(np.mean([item[2] for item in good])) if good else 0.0
 
 
 def merge_lines(existing, incoming):
@@ -106,42 +123,28 @@ def merge_lines(existing, incoming):
     for value in incoming:
         norm = normalize_ocr_line(value)
         if norm and norm.upper() not in seen:
-            merged.append(value)
+            merged.append(norm)
             seen.add(norm.upper())
-    return merged
+    return merged[-50:]
 
 
-def read_unlock_frame(ocr, bgr, aggressive=False):
-    lines, confidence = ocr_lines(ocr, bgr)
-    event = parse_text(lines)
-    if event:
-        return event, lines, confidence
+def read_frame_variants(ocr, bgr, aggressive=False):
+    merged, best_conf = [], 0.0
+    lines, conf = ocr_lines(ocr, bgr, 0.13 if aggressive else 0.18)
+    merged = merge_lines(merged, lines)
+    best_conf = max(best_conf, conf)
 
-    h, w = bgr.shape[:2]
-    crops = [
-        bgr[int(h * 0.03):int(h * 0.97), int(w * 0.03):int(w * 0.97)],
-        bgr[int(h * 0.08):int(h * 0.92), int(w * 0.08):int(w * 0.92)],
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.8 if aggressive else 2.0, tileGridSize=(8, 8)).apply(gray)
+    variants = [
+        cv2.resize(clahe, None, fx=1.55 if aggressive else 1.30, fy=1.55 if aggressive else 1.30, interpolation=cv2.INTER_CUBIC),
+        cv2.resize(cv2.adaptiveThreshold(clahe, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 7), None, fx=1.45, fy=1.45, interpolation=cv2.INTER_CUBIC),
     ]
-    if aggressive:
-        crops.append(bgr[0:int(h * 0.78), int(w * 0.12):w])
-
-    merged = list(lines)
-    best_conf = confidence
-    for crop in crops:
-        if crop.size == 0:
-            continue
-        crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.2 if aggressive else 1.8, tileGridSize=(8, 8))
-        crop_gray = clahe.apply(crop_gray)
-        scale = 1.45 if aggressive else 1.25
-        crop_up = cv2.resize(crop_gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-        more_lines, more_conf = ocr_lines(ocr, crop_up)
-        merged = merge_lines(merged, more_lines)
+    for image in variants:
+        more, more_conf = ocr_lines(ocr, image, 0.12 if aggressive else 0.16)
+        merged = merge_lines(merged, more)
         best_conf = max(best_conf, more_conf)
-        event = parse_text(merged)
-        if event:
-            return event, merged, best_conf
-    return None, merged, best_conf
+    return merged, best_conf
 
 
 def sanitize_zones(raw):
@@ -158,13 +161,7 @@ def sanitize_zones(raw):
             height = min(max(float(item.get("height", 0.1)), 0.03), 1.0 - y)
         except (TypeError, ValueError):
             continue
-        zones.append({
-            "name": str(item.get("name") or f"zone-{i+1}").lower(),
-            "x": x,
-            "y": y,
-            "width": width,
-            "height": height,
-        })
+        zones.append({"name": str(item.get("name") or f"zone-{i+1}").lower(), "x": x, "y": y, "width": width, "height": height})
     return zones or DEFAULT_ZONES
 
 
@@ -178,6 +175,30 @@ def scaled_region(monitor, reference_width, reference_height, scale_x, scale_y, 
     region["width"] = min(region["width"], monitor["left"] + monitor["width"] - region["left"])
     region["height"] = min(region["height"], monitor["top"] + monitor["height"] - region["top"])
     return region
+
+
+def candidate_key(candidate):
+    if not candidate:
+        return None
+    if candidate["kind"] == "family":
+        return (candidate["family"], candidate["number"])
+    return ("NAMED", compact_text(candidate.get("camo", "")))
+
+
+def emit_candidate(candidate, confidence, zone_name):
+    payload = {
+        "type": "unlock",
+        "weapon": candidate.get("weapon") or "UNKNOWN",
+        "family": candidate.get("family") if candidate["kind"] == "family" else None,
+        "number": candidate.get("number") if candidate["kind"] == "family" else None,
+        "camo": candidate.get("camo") if candidate["kind"] == "named" else None,
+        "rawText": candidate.get("rawText", ""),
+        "confidence": round(confidence, 3),
+        "zone": zone_name,
+        "timestamp": utc_now(),
+    }
+    emit(payload)
+    return (payload.get("weapon"), payload.get("family"), payload.get("number"), payload.get("camo"))
 
 
 def main():
@@ -222,7 +243,6 @@ def main():
         reference_height = int(args.height or monitor["height"])
         scale_x = float(monitor["width"]) / max(reference_width, 1)
         scale_y = float(monitor["height"]) / max(reference_height, 1)
-
         zones = []
         for spec in zone_specs:
             zones.append({
@@ -241,24 +261,16 @@ def main():
                 "burst_until": 0.0,
                 "next_burst_ocr": 0.0,
                 "burst_attempts": 0,
+                "burst_lines": [],
+                "burst_votes": Counter(),
+                "burst_candidates": {},
             })
 
-        emit({
-            "type": "status",
-            "message": "detector-ready",
-            "monitor": args.monitor,
-            "monitorSource": monitor_source,
-            "monitorBounds": monitor,
-            "settingsResolution": {"width": reference_width, "height": reference_height},
-            "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)},
-            "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones],
-            "fps": fps,
-        })
+        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps})
 
         while True:
             started = time.perf_counter()
             now = time.monotonic()
-
             for zone in zones:
                 frame = np.asarray(sct.grab(zone["region"]), dtype=np.uint8)
                 bgr = frame[:, :, :3]
@@ -268,24 +280,23 @@ def main():
                 zone["last_mean"] = float(np.mean(gray))
                 zone["last_stddev"] = float(np.std(gray))
                 zone["last_activity"] = activity
-
                 zone["baseline_activity"] = activity if zone["baseline_activity"] is None else zone["baseline_activity"] * 0.99 + activity * 0.01
                 mean_delta = 999.0 if zone["last_fp"] is None else float(np.mean(np.abs(fp - zone["last_fp"])))
                 zone["last_fp"] = fp
 
-                activity_spike = activity > (zone["baseline_activity"] + 0.0011)
-                visual_change = mean_delta >= 1.10
-                strong_change = mean_delta >= 2.2
-
-                # Any meaningful change starts a short OCR burst. This samples multiple
-                # animation frames instead of betting everything on one frame.
+                activity_spike = activity > (zone["baseline_activity"] + 0.0010)
+                visual_change = mean_delta >= 1.0
+                strong_change = mean_delta >= 2.0
                 if visual_change or activity_spike:
-                    zone["burst_until"] = max(zone["burst_until"], now + 2.0)
-                    if zone["burst_attempts"] == 0 or now > zone["burst_until"] - 1.7:
+                    if now > zone["burst_until"]:
+                        zone["burst_lines"] = []
+                        zone["burst_votes"] = Counter()
+                        zone["burst_candidates"] = {}
                         zone["burst_attempts"] = 0
-                        zone["next_burst_ocr"] = now
+                    zone["burst_until"] = max(zone["burst_until"], now + 2.2)
+                    zone["next_burst_ocr"] = min(zone["next_burst_ocr"] or now, now)
 
-                in_burst = now <= zone["burst_until"] and zone["burst_attempts"] < 7
+                in_burst = now <= zone["burst_until"] and zone["burst_attempts"] < 9
                 burst_due = in_burst and now >= zone["next_burst_ocr"]
                 heartbeat_due = (now - zone["last_ocr"]) >= 5.0
                 if not (burst_due or heartbeat_due):
@@ -294,63 +305,46 @@ def main():
                 zone["last_ocr"] = now
                 if burst_due:
                     zone["burst_attempts"] += 1
-                    zone["next_burst_ocr"] = now + 0.22
+                    zone["next_burst_ocr"] = now + 0.20
 
-                event, lines, confidence = read_unlock_frame(
-                    ocr,
-                    bgr,
-                    aggressive=(strong_change or burst_due),
-                )
+                lines, confidence = read_frame_variants(ocr, bgr, aggressive=(strong_change or burst_due))
+                zone["burst_lines"] = merge_lines(zone["burst_lines"], lines)
+                candidate = parse_candidate(zone["burst_lines"] if in_burst else lines)
+                if candidate:
+                    ckey = candidate_key(candidate)
+                    zone["burst_votes"][ckey] += 1
+                    zone["burst_candidates"][ckey] = candidate
 
-                debug_text = " | ".join(normalize_ocr_line(x) for x in lines if normalize_ocr_line(x))
+                debug_text = " | ".join(zone["burst_lines"] if in_burst else lines)
                 zone["last_ocr_text"] = debug_text
                 zone["last_ocr_confidence"] = confidence
-
-                if now - zone["last_debug"] >= 1.5:
-                    emit({
-                        "type": "ocr-debug",
-                        "zone": zone["name"],
-                        "rawText": debug_text,
-                        "confidence": round(confidence, 3),
-                        "delta": round(mean_delta, 3),
-                        "activity": round(activity, 5),
-                        "burst": bool(in_burst),
-                        "burstAttempt": zone["burst_attempts"],
-                        "timestamp": utc_now(),
-                    })
+                if now - zone["last_debug"] >= 1.2:
+                    emit({"type": "ocr-debug", "zone": zone["name"], "rawText": debug_text, "confidence": round(confidence, 3), "delta": round(mean_delta, 3), "activity": round(activity, 5), "burst": bool(in_burst), "burstAttempt": zone["burst_attempts"], "timestamp": utc_now()})
                     zone["last_debug"] = now
 
-                if event:
-                    event["confidence"] = round(confidence, 3)
-                    event["zone"] = zone["name"]
-                    event_key = (event.get("weapon"), event.get("family"), event.get("number"), event.get("camo"))
+                winner = None
+                if zone["burst_votes"]:
+                    vote_key, votes = zone["burst_votes"].most_common(1)[0]
+                    # Two agreeing reads is enough during a burst. If the parser sees an
+                    # explicit camo family + number with decent OCR, accept one strong read.
+                    candidate_obj = zone["burst_candidates"].get(vote_key)
+                    strong_single = candidate_obj and candidate_obj.get("kind") == "family" and confidence >= 0.45
+                    if votes >= 2 or strong_single:
+                        winner = candidate_obj
+
+                if winner:
+                    event_key = (winner.get("weapon"), winner.get("family"), winner.get("number"), winner.get("camo"))
                     if event_key != last_event_key or now - last_event_time > 8.0:
-                        emit(event)
-                        last_event_key = event_key
+                        last_event_key = emit_candidate(winner, confidence, zone["name"])
                         last_event_time = now
                     zone["burst_until"] = 0.0
                     zone["burst_attempts"] = 0
+                    zone["burst_lines"] = []
+                    zone["burst_votes"] = Counter()
+                    zone["burst_candidates"] = {}
 
             if now - last_health >= 5.0:
-                emit({
-                    "type": "capture-health",
-                    "monitor": args.monitor,
-                    "settingsResolution": {"width": reference_width, "height": reference_height},
-                    "zones": [
-                        {
-                            "name": z["name"],
-                            "region": z["region"],
-                            "mean": round(z["last_mean"], 2),
-                            "stddev": round(z["last_stddev"], 2),
-                            "activity": round(z["last_activity"], 5),
-                            "ocrText": z["last_ocr_text"],
-                            "ocrConfidence": round(z["last_ocr_confidence"], 3),
-                            "burstActive": time.monotonic() <= z["burst_until"],
-                        }
-                        for z in zones
-                    ],
-                    "timestamp": utc_now(),
-                })
+                emit({"type": "capture-health", "monitor": args.monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "zones": [{"name": z["name"], "region": z["region"], "mean": round(z["last_mean"], 2), "stddev": round(z["last_stddev"], 2), "activity": round(z["last_activity"], 5), "ocrText": z["last_ocr_text"], "ocrConfidence": round(z["last_ocr_confidence"], 3), "burstActive": time.monotonic() <= z["burst_until"]} for z in zones], "timestamp": utc_now()})
                 last_health = now
 
             elapsed = time.perf_counter() - started
