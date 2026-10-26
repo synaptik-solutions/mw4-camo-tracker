@@ -5,9 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MW4 Camo Tracker</title>
   <link rel="stylesheet" href="styles.css" />
+  <style>
+    #quick-update-wrap{position:fixed;top:12px;right:14px;z-index:99999;display:flex;align-items:center;gap:8px;font-family:Segoe UI,Arial,sans-serif}
+    #quick-update{border:1px solid rgba(95,213,174,.55);background:rgba(12,23,34,.94);color:#eafaf4;border-radius:8px;padding:7px 11px;font-size:11px;font-weight:700;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.25)}
+    #quick-update:hover{background:rgba(24,48,58,.98)}
+    #quick-update:disabled{opacity:.65;cursor:default}
+    #quick-update-status{max-width:210px;color:#aebfba;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  </style>
 </head>
 <body>
   <div id="root"></div>
+  <div id="quick-update-wrap"><span id="quick-update-status"></span><button id="quick-update">Check update</button></div>
   <script src="renderer.bundle.js"></script>
+  <script>
+    (() => {
+      const button = document.getElementById('quick-update');
+      const status = document.getElementById('quick-update-status');
+      let mode = 'check';
+      const render = (u = {}) => {
+        status.textContent = u.message || '';
+        button.disabled = false;
+        if (u.status === 'checking') { mode='none'; button.textContent='Checking…'; button.disabled=true; }
+        else if (u.status === 'available') { mode='download'; button.textContent='Download update'; }
+        else if (u.status === 'downloading') { mode='none'; button.textContent=`Updating ${u.percent || 0}%`; button.disabled=true; }
+        else if (u.status === 'ready') { mode='install'; button.textContent='Restart & install'; }
+        else { mode='check'; button.textContent='Check update'; }
+      };
+      button.addEventListener('click', async () => {
+        if (!window.tracker) return;
+        if (mode === 'download') await window.tracker.downloadUpdate();
+        else if (mode === 'install') await window.tracker.installUpdate();
+        else if (mode === 'check') await window.tracker.checkForUpdates();
+      });
+      if (window.tracker) {
+        window.tracker.onUpdateStatus(render);
+        window.tracker.getState().then(s => render(s.update || {})).catch(() => {});
+      }
+    })();
+  </script>
 </body>
 </html>
