@@ -17,6 +17,14 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Set build version
+        shell: pwsh
+        run: |
+          $version = "0.2.${{ github.run_number }}"
+          npm version $version --no-git-tag-version
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Building MW4 Camo Tracker v$version"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -44,7 +52,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: MW4-Camo-Tracker-Windows
+          name: MW4-Camo-Tracker-Windows-${{ env.APP_VERSION }}
           path: dist/*.exe
           if-no-files-found: error
           retention-days: 30
