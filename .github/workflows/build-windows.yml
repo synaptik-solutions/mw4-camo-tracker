@@ -1,0 +1,50 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r worker/requirements.txt pyinstaller
+
+      - name: Build detector exe
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --name detector --collect-all rapidocr_onnxruntime --collect-all onnxruntime --distpath worker-dist worker/detector.py
+
+      - name: Install app dependencies
+        run: npm install
+
+      - name: Build Windows installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MW4-Camo-Tracker-Windows
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 30
