@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
+const { autoUpdater } = require('electron-updater');
 const { weapons: camoWeapons } = require('./camoCatalog');
 
 const store = new Store({
@@ -16,6 +17,29 @@ let mainWindow;
 let overlayWindow;
 let detectorProcess;
 let lastOverlayTimer;
+let updateState = { status: 'idle', version: app.getVersion(), percent: 0, message: '' };
+
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch };
+  mainWindow?.webContents.send('update-status', updateState);
+}
+
+function configureUpdater() {
+  if (!app.isPackaged) {
+    setUpdateState({ status: 'dev', message: 'Updates are available in installed builds only.' });
+    return;
+  }
+
+  autoUpdater.on('checking-for-update', () => setUpdateState({ status: 'checking', message: 'Checking for updates…', percent: 0 }));
+  autoUpdater.on('update-available', (info) => setUpdateState({ status: 'available', version: info.version, message: `Version ${info.version} is available.`, percent: 0 }));
+  autoUpdater.on('update-not-available', (info) => setUpdateState({ status: 'current', version: info?.version || app.getVersion(), message: 'You already have the latest version.', percent: 0 }));
+  autoUpdater.on('download-progress', (progress) => setUpdateState({ status: 'downloading', percent: Math.round(progress.percent || 0), message: `Downloading update… ${Math.round(progress.percent || 0)}%` }));
+  autoUpdater.on('update-downloaded', (info) => setUpdateState({ status: 'ready', version: info.version, percent: 100, message: `Version ${info.version} is ready to install.` }));
+  autoUpdater.on('error', (error) => setUpdateState({ status: 'error', message: error?.message || 'Update check failed.' }));
+}
 
 const weaponAliases = new Map();
 for (const item of camoWeapons) {
@@ -109,7 +133,6 @@ function saveUnlock(rawEvent) {
   const progress = store.get('progress');
   const { key, current: weapon } = getWeaponProgress(progress, event.weapon);
 
-  // If Camo 5 is seen after Camo 3, automatically backfill Camo 4.
   if (event.family && Number.isInteger(event.number) && event.number > 0) {
     const family = event.family.includes('MILITARY') ? 'MILITARY CAMO' : event.family;
     for (let n = 1; n <= event.number; n += 1) {
@@ -235,11 +258,14 @@ function startDetector() {
 app.whenReady().then(() => {
   createMainWindow();
   createOverlayWindow();
+  configureUpdater();
 
   ipcMain.handle('get-state', () => ({
     settings: store.get('settings'),
     progress: store.get('progress'),
-    monitors: getMonitors()
+    monitors: getMonitors(),
+    appVersion: app.getVersion(),
+    update: updateState
   }));
 
   ipcMain.handle('save-settings', (_, settings) => {
@@ -263,8 +289,24 @@ app.whenReady().then(() => {
     return { ok: true };
   });
   ipcMain.handle('test-unlock', (_, event) => { saveUnlock(event); return { ok: true }; });
+  ipcMain.handle('check-for-updates', async () => {
+    if (!app.isPackaged) return { ok: false, update: updateState };
+    try { await autoUpdater.checkForUpdates(); return { ok: true, update: updateState }; }
+    catch (error) { setUpdateState({ status: 'error', message: error.message }); return { ok: false, update: updateState }; }
+  });
+  ipcMain.handle('download-update', async () => {
+    try { await autoUpdater.downloadUpdate(); return { ok: true }; }
+    catch (error) { setUpdateState({ status: 'error', message: error.message }); return { ok: false }; }
+  });
+  ipcMain.handle('install-update', () => {
+    if (updateState.status !== 'ready') return { ok: false };
+    stopDetector();
+    setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    return { ok: true };
+  });
 
   if (store.get('settings.autoStart')) setTimeout(startDetector, 800);
+  if (app.isPackaged) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 2500);
 });
 
 app.on('window-all-closed', () => {
