@@ -81,7 +81,7 @@ def parse_candidate(lines):
     compact = normalize_ocr_line(compact).upper()
     weapon = fuzzy_weapon(clean) or "UNKNOWN"
 
-    # Intentionally do not require the small UNLOCKED header; OCR often misses it.
+    # Do not require the small UNLOCKED header; OCR often misses it.
     match = UNLOCK_RE.search(compact)
     if match:
         return {
@@ -107,6 +107,87 @@ def text_activity(gray):
     small = cv2.resize(gray, (140, 79), interpolation=cv2.INTER_AREA)
     _, bright = cv2.threshold(small, 185, 255, cv2.THRESH_BINARY)
     return float(np.count_nonzero(bright)) / float(bright.size)
+
+
+def popup_layout_score(bgr):
+    """Cheap structural match based on the supplied MW4 unlock popup screenshot.
+
+    The reusable visual signature is the bright yellow/green UNLOCKED tab sitting over
+    a compact card with a square thumbnail at the left and high-contrast text below.
+    We deliberately do not template-match the exact camo image so this works for every camo.
+    """
+    h, w = bgr.shape[:2]
+    if h < 24 or w < 48:
+        return 0.0
+
+    max_w = 420
+    scale = min(1.0, max_w / float(w))
+    if scale < 1.0:
+        sample = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        sample = bgr
+    sh, sw = sample.shape[:2]
+
+    hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
+    # The screenshot's header is a muted yellow-green. Keep the range broad enough for
+    # HDR/brightness changes while still excluding most HUD whites/oranges.
+    green = cv2.inRange(hsv, np.array([25, 28, 115], dtype=np.uint8), np.array([95, 255, 255], dtype=np.uint8))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+    green = cv2.morphologyEx(green, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    gray = cv2.cvtColor(sample, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 70, 150)
+    best = 0.0
+    for contour in contours:
+        x, y, bw, bh = cv2.boundingRect(contour)
+        if bw < max(18, int(sw * 0.035)) or bh < 3:
+            continue
+        ratio = bw / float(max(bh, 1))
+        if ratio < 1.6 or ratio > 14.0:
+            continue
+        if y > sh * 0.82:
+            continue
+
+        area_ratio = (bw * bh) / float(sw * sh)
+        if area_ratio < 0.0007 or area_ratio > 0.09:
+            continue
+
+        # Unlock card extends mostly left and downward from the green header.
+        card_x0 = max(0, x - int(bw * 2.8))
+        card_y0 = max(0, y - int(bh * 0.4))
+        card_x1 = min(sw, x + int(bw * 1.15))
+        card_y1 = min(sh, y + int(bh * 6.5))
+        if card_x1 <= card_x0 or card_y1 <= card_y0:
+            continue
+
+        card_edges = edges[card_y0:card_y1, card_x0:card_x1]
+        card_gray = gray[card_y0:card_y1, card_x0:card_x1]
+        if card_edges.size == 0 or card_gray.size == 0:
+            continue
+        edge_density = float(np.count_nonzero(card_edges)) / float(card_edges.size)
+        contrast = float(np.std(card_gray)) / 64.0
+
+        # Search the left side of the card for a roughly square thumbnail/detail block.
+        left_w = max(1, int((card_x1 - card_x0) * 0.38))
+        left = card_edges[:, :left_w]
+        square_hint = 0.0
+        if left.size:
+            lcontours, _ = cv2.findContours(left, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            for lc in lcontours:
+                lx, ly, lw, lh = cv2.boundingRect(lc)
+                if min(lw, lh) < 8:
+                    continue
+                sq_ratio = lw / float(max(lh, 1))
+                if 0.65 <= sq_ratio <= 1.45:
+                    square_hint = 1.0
+                    break
+
+        ratio_score = 1.0 - min(abs(ratio - 4.0) / 6.0, 1.0)
+        score = 0.38 + 0.20 * ratio_score + 0.22 * min(edge_density / 0.12, 1.0) + 0.12 * min(contrast, 1.0) + 0.08 * square_hint
+        best = max(best, score)
+
+    return float(min(best, 1.0))
 
 
 def ocr_lines(ocr, image, min_conf=0.15):
@@ -258,6 +339,7 @@ def main():
                 "last_activity": 0.0,
                 "last_ocr_text": "",
                 "last_ocr_confidence": 0.0,
+                "last_popup_score": 0.0,
                 "burst_until": 0.0,
                 "next_burst_ocr": 0.0,
                 "burst_attempts": 0,
@@ -266,7 +348,7 @@ def main():
                 "burst_candidates": {},
             })
 
-        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps})
+        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": True})
 
         while True:
             started = time.perf_counter()
@@ -277,6 +359,8 @@ def main():
                 gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
                 fp = fingerprint(gray)
                 activity = text_activity(gray)
+                popup_score = popup_layout_score(bgr)
+                zone["last_popup_score"] = popup_score
                 zone["last_mean"] = float(np.mean(gray))
                 zone["last_stddev"] = float(np.std(gray))
                 zone["last_activity"] = activity
@@ -287,16 +371,18 @@ def main():
                 activity_spike = activity > (zone["baseline_activity"] + 0.0010)
                 visual_change = mean_delta >= 1.0
                 strong_change = mean_delta >= 2.0
-                if visual_change or activity_spike:
+                popup_match = popup_score >= 0.58
+
+                if visual_change or activity_spike or popup_match:
                     if now > zone["burst_until"]:
                         zone["burst_lines"] = []
                         zone["burst_votes"] = Counter()
                         zone["burst_candidates"] = {}
                         zone["burst_attempts"] = 0
-                    zone["burst_until"] = max(zone["burst_until"], now + 2.2)
+                    zone["burst_until"] = max(zone["burst_until"], now + (3.0 if popup_match else 2.2))
                     zone["next_burst_ocr"] = min(zone["next_burst_ocr"] or now, now)
 
-                in_burst = now <= zone["burst_until"] and zone["burst_attempts"] < 9
+                in_burst = now <= zone["burst_until"] and zone["burst_attempts"] < (12 if popup_match else 9)
                 burst_due = in_burst and now >= zone["next_burst_ocr"]
                 heartbeat_due = (now - zone["last_ocr"]) >= 5.0
                 if not (burst_due or heartbeat_due):
@@ -305,9 +391,9 @@ def main():
                 zone["last_ocr"] = now
                 if burst_due:
                     zone["burst_attempts"] += 1
-                    zone["next_burst_ocr"] = now + 0.20
+                    zone["next_burst_ocr"] = now + (0.16 if popup_match else 0.20)
 
-                lines, confidence = read_frame_variants(ocr, bgr, aggressive=(strong_change or burst_due))
+                lines, confidence = read_frame_variants(ocr, bgr, aggressive=(strong_change or burst_due or popup_match))
                 zone["burst_lines"] = merge_lines(zone["burst_lines"], lines)
                 candidate = parse_candidate(zone["burst_lines"] if in_burst else lines)
                 if candidate:
@@ -319,17 +405,16 @@ def main():
                 zone["last_ocr_text"] = debug_text
                 zone["last_ocr_confidence"] = confidence
                 if now - zone["last_debug"] >= 1.2:
-                    emit({"type": "ocr-debug", "zone": zone["name"], "rawText": debug_text, "confidence": round(confidence, 3), "delta": round(mean_delta, 3), "activity": round(activity, 5), "burst": bool(in_burst), "burstAttempt": zone["burst_attempts"], "timestamp": utc_now()})
+                    emit({"type": "ocr-debug", "zone": zone["name"], "rawText": debug_text, "confidence": round(confidence, 3), "delta": round(mean_delta, 3), "activity": round(activity, 5), "popupScore": round(popup_score, 3), "popupMatch": bool(popup_match), "burst": bool(in_burst), "burstAttempt": zone["burst_attempts"], "timestamp": utc_now()})
                     zone["last_debug"] = now
 
                 winner = None
                 if zone["burst_votes"]:
                     vote_key, votes = zone["burst_votes"].most_common(1)[0]
-                    # Two agreeing reads is enough during a burst. If the parser sees an
-                    # explicit camo family + number with decent OCR, accept one strong read.
                     candidate_obj = zone["burst_candidates"].get(vote_key)
                     strong_single = candidate_obj and candidate_obj.get("kind") == "family" and confidence >= 0.45
-                    if votes >= 2 or strong_single:
+                    popup_single = popup_match and candidate_obj and candidate_obj.get("kind") == "family" and confidence >= 0.28
+                    if votes >= 2 or strong_single or popup_single:
                         winner = candidate_obj
 
                 if winner:
@@ -344,7 +429,7 @@ def main():
                     zone["burst_candidates"] = {}
 
             if now - last_health >= 5.0:
-                emit({"type": "capture-health", "monitor": args.monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "zones": [{"name": z["name"], "region": z["region"], "mean": round(z["last_mean"], 2), "stddev": round(z["last_stddev"], 2), "activity": round(z["last_activity"], 5), "ocrText": z["last_ocr_text"], "ocrConfidence": round(z["last_ocr_confidence"], 3), "burstActive": time.monotonic() <= z["burst_until"]} for z in zones], "timestamp": utc_now()})
+                emit({"type": "capture-health", "monitor": args.monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "zones": [{"name": z["name"], "region": z["region"], "mean": round(z["last_mean"], 2), "stddev": round(z["last_stddev"], 2), "activity": round(z["last_activity"], 5), "popupScore": round(z["last_popup_score"], 3), "ocrText": z["last_ocr_text"], "ocrConfidence": round(z["last_ocr_confidence"], 3), "burstActive": time.monotonic() <= z["burst_until"]} for z in zones], "timestamp": utc_now()})
                 last_health = now
 
             elapsed = time.perf_counter() - started
