@@ -153,8 +153,6 @@ def main():
         scale_x = float(monitor["width"]) / float(max(reference_width, 1))
         scale_y = float(monitor["height"]) / float(max(reference_height, 1))
 
-        # Two small, resolution-independent zones. The selected display in Settings is
-        # always the reference coordinate system so these stay in the same relative spots.
         zone_specs = [
             {"name": "upper-right", "x": 0.58, "y": 0.05, "width": 0.40, "height": 0.40},
             {"name": "center", "x": 0.27, "y": 0.25, "width": 0.46, "height": 0.50},
@@ -168,6 +166,12 @@ def main():
                 "last_fp": None,
                 "baseline_activity": None,
                 "last_ocr": 0.0,
+                "last_debug": 0.0,
+                "last_mean": 0.0,
+                "last_stddev": 0.0,
+                "last_activity": 0.0,
+                "last_ocr_text": "",
+                "last_ocr_confidence": 0.0,
             })
 
         emit({
@@ -192,6 +196,9 @@ def main():
                 gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
                 fp = fingerprint(gray)
                 activity = text_activity(gray)
+                zone["last_mean"] = float(np.mean(gray))
+                zone["last_stddev"] = float(np.std(gray))
+                zone["last_activity"] = activity
 
                 if zone["baseline_activity"] is None:
                     zone["baseline_activity"] = activity
@@ -207,8 +214,6 @@ def main():
                 visual_change = mean_delta >= 1.5
                 strong_change = mean_delta >= 2.9
 
-                # Each small zone gets its own trigger. Heartbeat is intentionally slow so
-                # two-zone coverage stays lightweight while still catching missed animations.
                 heartbeat_due = (now - zone["last_ocr"]) >= 6.0
                 burst_due = (now - zone["last_ocr"]) >= 0.60 and (visual_change or activity_spike)
                 if not (heartbeat_due or burst_due):
@@ -234,6 +239,21 @@ def main():
                         confidence = max(confidence, focus_conf)
                         event = parse_text(lines)
 
+                debug_text = " | ".join(normalize_ocr_line(x) for x in lines if normalize_ocr_line(x))
+                zone["last_ocr_text"] = debug_text
+                zone["last_ocr_confidence"] = confidence
+                if (now - zone["last_debug"]) >= 2.0:
+                    emit({
+                        "type": "ocr-debug",
+                        "zone": zone["name"],
+                        "rawText": debug_text,
+                        "confidence": round(confidence, 3),
+                        "delta": round(mean_delta, 3),
+                        "activity": round(activity, 5),
+                        "timestamp": utc_now(),
+                    })
+                    zone["last_debug"] = now
+
                 if event:
                     event["confidence"] = round(confidence, 3)
                     event["zone"] = zone["name"]
@@ -243,12 +263,23 @@ def main():
                         last_event_key = event_key
                         last_event_time = now
 
-            if (now - last_health) >= 10.0:
+            if (now - last_health) >= 5.0:
                 emit({
                     "type": "capture-health",
                     "monitor": args.monitor,
                     "settingsResolution": {"width": reference_width, "height": reference_height},
-                    "zoneCount": len(zones),
+                    "zones": [
+                        {
+                            "name": zone["name"],
+                            "region": zone["region"],
+                            "mean": round(zone["last_mean"], 2),
+                            "stddev": round(zone["last_stddev"], 2),
+                            "activity": round(zone["last_activity"], 5),
+                            "ocrText": zone["last_ocr_text"],
+                            "ocrConfidence": round(zone["last_ocr_confidence"], 3),
+                        }
+                        for zone in zones
+                    ],
                     "timestamp": utc_now(),
                 })
                 last_health = now
