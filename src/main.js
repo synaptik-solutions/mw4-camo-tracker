@@ -210,6 +210,7 @@ function startDetector() {
   const runner = detectorCommand();
   const args = [
     ...runner.prefixArgs,
+    '--monitor', String((display.index ?? settings.monitorIndex ?? 0) + 1),
     '--left', String(display.bounds.x),
     '--top', String(display.bounds.y),
     '--width', String(display.bounds.width),
