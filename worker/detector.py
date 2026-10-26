@@ -78,12 +78,12 @@ def parse_text(lines):
 
 
 def fingerprint(gray):
-    small = cv2.resize(gray, (64, 36), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(gray, (48, 27), interpolation=cv2.INTER_AREA)
     return small.astype(np.int16)
 
 
 def text_activity(gray):
-    small = cv2.resize(gray, (180, 100), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(gray, (140, 79), interpolation=cv2.INTER_AREA)
     _, bright = cv2.threshold(small, 190, 255, cv2.THRESH_BINARY)
     return float(np.count_nonzero(bright)) / float(bright.size)
 
@@ -96,6 +96,22 @@ def ocr_lines(ocr, image):
     lines = [item[1] for item in good]
     confidence = float(np.mean([item[2] for item in good])) if good else 0.0
     return lines, confidence
+
+
+def scaled_region(monitor, reference_width, reference_height, scale_x, scale_y, spec):
+    ref_left = int(reference_width * spec["x"])
+    ref_top = int(reference_height * spec["y"])
+    ref_width = int(reference_width * spec["width"])
+    ref_height = int(reference_height * spec["height"])
+    region = {
+        "left": monitor["left"] + int(ref_left * scale_x),
+        "top": monitor["top"] + int(ref_top * scale_y),
+        "width": max(1, int(ref_width * scale_x)),
+        "height": max(1, int(ref_height * scale_y)),
+    }
+    region["width"] = min(region["width"], monitor["left"] + monitor["width"] - region["left"])
+    region["height"] = min(region["height"], monitor["top"] + monitor["height"] - region["top"])
+    return region
 
 
 def main():
@@ -117,13 +133,9 @@ def main():
         pass
 
     ocr = RapidOCR(det_use_dilation=True)
-    last_fp = None
-    baseline_activity = None
-    last_ocr = 0.0
-    last_debug = 0.0
-    last_health = 0.0
     last_event_key = None
     last_event_time = 0.0
+    last_health = 0.0
 
     with mss.mss() as sct:
         if 1 <= args.monitor < len(sct.monitors):
@@ -136,37 +148,27 @@ def main():
             monitor = dict(sct.monitors[1])
             monitor_source = "mss-1-fallback"
 
-        # The selected display from Settings is the coordinate reference. Electron passes
-        # its displayed width/height here. We calculate the watch box in that coordinate
-        # system, then scale it onto MSS' physical capture surface. This keeps the same
-        # relative location across 1080p, 1440p, ultrawide, and DPI scaling differences.
         reference_width = int(args.width or monitor["width"])
         reference_height = int(args.height or monitor["height"])
         scale_x = float(monitor["width"]) / float(max(reference_width, 1))
         scale_y = float(monitor["height"]) / float(max(reference_height, 1))
 
-        # Current universal watch box. Coordinates are percentages of the selected screen.
-        # These can be refined from recorded footage without becoming resolution-specific.
-        x_pct = 0.52
-        y_pct = 0.04
-        w_pct = 0.47
-        h_pct = 0.62
-
-        ref_left = int(reference_width * x_pct)
-        ref_top = int(reference_height * y_pct)
-        ref_width = max(360, int(reference_width * w_pct))
-        ref_height = max(320, int(reference_height * h_pct))
-
-        region = {
-            "left": monitor["left"] + int(ref_left * scale_x),
-            "top": monitor["top"] + int(ref_top * scale_y),
-            "width": min(monitor["width"], max(1, int(ref_width * scale_x))),
-            "height": min(monitor["height"], max(1, int(ref_height * scale_y))),
-        }
-
-        # Clamp the scaled box so it can never extend off the physical capture surface.
-        region["width"] = min(region["width"], monitor["left"] + monitor["width"] - region["left"])
-        region["height"] = min(region["height"], monitor["top"] + monitor["height"] - region["top"])
+        # Two small, resolution-independent zones. The selected display in Settings is
+        # always the reference coordinate system so these stay in the same relative spots.
+        zone_specs = [
+            {"name": "upper-right", "x": 0.58, "y": 0.05, "width": 0.40, "height": 0.40},
+            {"name": "center", "x": 0.27, "y": 0.25, "width": 0.46, "height": 0.50},
+        ]
+        zones = []
+        for spec in zone_specs:
+            zones.append({
+                "name": spec["name"],
+                "percent": {k: spec[k] for k in ("x", "y", "width", "height")},
+                "region": scaled_region(monitor, reference_width, reference_height, scale_x, scale_y, spec),
+                "last_fp": None,
+                "baseline_activity": None,
+                "last_ocr": 0.0,
+            })
 
         emit({
             "type": "status",
@@ -176,49 +178,52 @@ def main():
             "monitorBounds": monitor,
             "settingsResolution": {"width": reference_width, "height": reference_height},
             "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)},
-            "regionPercent": {"x": x_pct, "y": y_pct, "width": w_pct, "height": h_pct},
-            "region": region,
+            "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones],
             "fps": fps,
         })
 
         while True:
             started = time.perf_counter()
-            frame = np.asarray(sct.grab(region), dtype=np.uint8)
-            bgr = frame[:, :, :3]
-            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            fp = fingerprint(gray)
-            activity = text_activity(gray)
-
-            if baseline_activity is None:
-                baseline_activity = activity
-            else:
-                baseline_activity = baseline_activity * 0.99 + activity * 0.01
-
-            mean_delta = 999.0
-            if last_fp is not None:
-                mean_delta = float(np.mean(np.abs(fp - last_fp)))
-            last_fp = fp
-
             now = time.monotonic()
-            activity_spike = activity > (baseline_activity + 0.0014)
-            visual_change = mean_delta >= 1.45
-            strong_change = mean_delta >= 2.8
 
-            heartbeat_due = (now - last_ocr) >= 4.0
-            burst_due = (now - last_ocr) >= 0.55 and (visual_change or activity_spike)
-            should_ocr = heartbeat_due or burst_due
+            for zone in zones:
+                frame = np.asarray(sct.grab(zone["region"]), dtype=np.uint8)
+                bgr = frame[:, :, :3]
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                fp = fingerprint(gray)
+                activity = text_activity(gray)
 
-            if should_ocr:
-                last_ocr = now
+                if zone["baseline_activity"] is None:
+                    zone["baseline_activity"] = activity
+                else:
+                    zone["baseline_activity"] = zone["baseline_activity"] * 0.99 + activity * 0.01
+
+                mean_delta = 999.0
+                if zone["last_fp"] is not None:
+                    mean_delta = float(np.mean(np.abs(fp - zone["last_fp"])))
+                zone["last_fp"] = fp
+
+                activity_spike = activity > (zone["baseline_activity"] + 0.0015)
+                visual_change = mean_delta >= 1.5
+                strong_change = mean_delta >= 2.9
+
+                # Each small zone gets its own trigger. Heartbeat is intentionally slow so
+                # two-zone coverage stays lightweight while still catching missed animations.
+                heartbeat_due = (now - zone["last_ocr"]) >= 6.0
+                burst_due = (now - zone["last_ocr"]) >= 0.60 and (visual_change or activity_spike)
+                if not (heartbeat_due or burst_due):
+                    continue
+
+                zone["last_ocr"] = now
                 lines, confidence = ocr_lines(ocr, bgr)
                 event = parse_text(lines)
 
                 if not event and (strong_change or activity_spike):
                     h, w = bgr.shape[:2]
-                    focus = bgr[0:int(h * 0.72), int(w * 0.18):w]
+                    focus = bgr[int(h * 0.08):int(h * 0.92), int(w * 0.08):int(w * 0.92)]
                     focus_gray = cv2.cvtColor(focus, cv2.COLOR_BGR2GRAY)
                     focus_gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(focus_gray)
-                    focus_up = cv2.resize(focus_gray, None, fx=1.25, fy=1.25, interpolation=cv2.INTER_CUBIC)
+                    focus_up = cv2.resize(focus_gray, None, fx=1.20, fy=1.20, interpolation=cv2.INTER_CUBIC)
                     focus_lines, focus_conf = ocr_lines(ocr, focus_up)
                     if focus_lines:
                         merged = list(lines)
@@ -229,32 +234,21 @@ def main():
                         confidence = max(confidence, focus_conf)
                         event = parse_text(lines)
 
-                if lines and (now - last_debug) >= 3.0:
-                    emit({
-                        "type": "ocr-debug",
-                        "rawText": " | ".join(normalize_ocr_line(x) for x in lines),
-                        "delta": round(mean_delta, 3),
-                        "activity": round(activity, 5),
-                        "timestamp": utc_now(),
-                    })
-                    last_debug = now
-
                 if event:
                     event["confidence"] = round(confidence, 3)
+                    event["zone"] = zone["name"]
                     event_key = (event.get("weapon"), event.get("family"), event.get("number"), event.get("camo"))
                     if event_key != last_event_key or (now - last_event_time) > 8.0:
                         emit(event)
                         last_event_key = event_key
                         last_event_time = now
 
-            if (now - last_health) >= 8.0:
+            if (now - last_health) >= 10.0:
                 emit({
                     "type": "capture-health",
-                    "mean": round(float(np.mean(gray)), 2),
-                    "stddev": round(float(np.std(gray)), 2),
-                    "activity": round(activity, 5),
                     "monitor": args.monitor,
                     "settingsResolution": {"width": reference_width, "height": reference_height},
+                    "zoneCount": len(zones),
                     "timestamp": utc_now(),
                 })
                 last_health = now
