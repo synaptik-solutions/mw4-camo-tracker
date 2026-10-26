@@ -161,8 +161,19 @@ function startDetector(){
   detectorProcess=spawn(runner.command,args,{windowsHide:true}); let stdoutBuffer=''; const spawnedProcess=detectorProcess;
   spawnedProcess.stdout.on('data',chunk=>{ stdoutBuffer+=chunk.toString(); let newline; while((newline=stdoutBuffer.indexOf('\n'))>=0){ const line=stdoutBuffer.slice(0,newline).trim(); stdoutBuffer=stdoutBuffer.slice(newline+1); if(!line) continue; try{ const message=JSON.parse(line); if(message.type==='unlock') saveUnlock(message); else if(message.type==='error') mainWindow?.webContents.send('detector-error',message.message||'Detector error'); else mainWindow?.webContents.send('detector-message',message); }catch(_){} } });
   spawnedProcess.stderr.on('data',chunk=>mainWindow?.webContents.send('detector-log',chunk.toString()));
-  spawnedProcess.on('error',error=>{if(detectorProcess===spawnedProcess)detectorProcess=null;hideWatchBadge();mainWindow?.webContents.send('detector-state',{running:false});mainWindow?.webContents.send('detector-error',`Could not start detector: ${error.message}`);});
-  spawnedProcess.on('exit',code=>{if(detectorProcess===spawnedProcess)detectorProcess=null;hideWatchBadge();mainWindow?.webContents.send('detector-state',{running:false,code});});
+  spawnedProcess.on('error',error=>{
+    if(detectorProcess!==spawnedProcess) return;
+    detectorProcess=null;
+    hideWatchBadge();
+    mainWindow?.webContents.send('detector-state',{running:false});
+    mainWindow?.webContents.send('detector-error',`Could not start detector: ${error.message}`);
+  });
+  spawnedProcess.on('exit',code=>{
+    if(detectorProcess!==spawnedProcess) return;
+    detectorProcess=null;
+    hideWatchBadge();
+    mainWindow?.webContents.send('detector-state',{running:false,code});
+  });
   showWatchBadge(display); mainWindow?.webContents.send('detector-state',{running:true,monitor:display.label}); return true;
 }
 
