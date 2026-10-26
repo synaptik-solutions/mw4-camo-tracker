@@ -1,16 +1,22 @@
 const React = require('react');
 const { createRoot } = require('react-dom/client');
+const { weapons: catalogWeapons, categories, mastery, prestige, allCamosForWeapon, pending } = require('./camoCatalog');
 
 function fmtTime(ts) {
   if (!ts) return '—';
   try { return new Date(ts).toLocaleString(); } catch { return ts; }
 }
 
+function key(value) { return String(value || '').trim().toUpperCase(); }
+
 function App() {
   const [state, setState] = React.useState({ settings:{ monitorIndex:1, scanFps:4, overlay:true, autoStart:true }, progress:{ weapons:{}, events:[] }, monitors:[] });
   const [running, setRunning] = React.useState(false);
   const [error, setError] = React.useState('');
   const [tab, setTab] = React.useState('dashboard');
+  const [category, setCategory] = React.useState('All');
+  const [query, setQuery] = React.useState('');
+  const [openWeapon, setOpenWeapon] = React.useState(null);
 
   const refresh = React.useCallback(async () => setState(await window.tracker.getState()), []);
 
@@ -22,16 +28,53 @@ function App() {
   }, [refresh]);
 
   const progress = state.progress || { weapons:{}, events:[] };
-  const weapons = Object.entries(progress.weapons || {});
   const events = progress.events || [];
-  const unlockCount = weapons.reduce((sum, [,w]) => sum + (w.unlocks?.length || 0), 0);
   const latest = events[0];
+
+  function weaponProgress(w) {
+    const aliases = [w.name, ...(w.aliases || [])].map(key);
+    for (const alias of aliases) {
+      if (progress.weapons?.[alias]) return progress.weapons[alias];
+    }
+    return { unlocks:[], lastSeen:null };
+  }
+
+  function isDone(w, camoName) {
+    const unlocks = (weaponProgress(w).unlocks || []).map(key);
+    return unlocks.includes(key(camoName));
+  }
+
+  function doneCount(w) {
+    return allCamosForWeapon(w).filter(c => isDone(w, c.name)).length;
+  }
+
+  const totalWeaponCamos = catalogWeapons.reduce((sum,w)=>sum + allCamosForWeapon(w).length, 0);
+  const totalWeaponDone = catalogWeapons.reduce((sum,w)=>sum + doneCount(w), 0);
+  const weaponsStarted = catalogWeapons.filter(w => doneCount(w) > 0).length;
+  const weaponsComplete = catalogWeapons.filter(w => doneCount(w) === allCamosForWeapon(w).length).length;
+  const globalProgress = progress.weapons?.GLOBAL || { unlocks:[] };
+  const globalUnlocks = (globalProgress.unlocks || []).map(key);
 
   async function saveSettings(patch) {
     const settings = { ...state.settings, ...patch };
     setState(s => ({...s, settings}));
     await window.tracker.saveSettings(settings);
   }
+
+  async function toggleCamo(w, camo, complete) {
+    await window.tracker.setCamoStatus(w.name, camo.name, complete);
+  }
+
+  async function toggleGlobal(name, complete) {
+    await window.tracker.setCamoStatus('GLOBAL', name, complete);
+  }
+
+  const visibleWeapons = catalogWeapons.filter(w => {
+    const classMatch = category === 'All' || w.category === category;
+    const q = query.trim().toLowerCase();
+    const searchMatch = !q || w.name.toLowerCase().includes(q) || w.category.toLowerCase().includes(q);
+    return classMatch && searchMatch;
+  });
 
   return <div className="shell">
     <aside className="sidebar">
@@ -46,17 +89,61 @@ function App() {
         {error && <div className="error">{error}</div>}
         <div className="cards">
           <section className="card latest"><span className="eyebrow">LATEST DETECTION</span><h3>{latest?.weapon || 'No unlock detected yet'}</h3><p>{latest ? (latest.camo || `${latest.family || 'CAMO'} ${latest.number || ''}`) : 'Leave the tracker running while you play.'}</p></section>
-          <section className="card metric"><span>Weapons seen</span><b>{weapons.length}</b></section>
-          <section className="card metric"><span>Unlocks tracked</span><b>{unlockCount}</b></section>
-          <section className="card metric"><span>Events saved</span><b>{events.length}</b></section>
+          <section className="card metric"><span>Weapon camos</span><b>{totalWeaponDone}<em>/{totalWeaponCamos}</em></b></section>
+          <section className="card metric"><span>Weapons started</span><b>{weaponsStarted}<em>/33</em></b></section>
+          <section className="card metric"><span>Weapons complete</span><b>{weaponsComplete}<em>/33</em></b></section>
         </div>
+        <div className="overallBar"><div style={{width:`${totalWeaponCamos ? (totalWeaponDone/totalWeaponCamos)*100 : 0}%`}}></div></div>
         <div className="twoCol">
           <section className="card"><span className="eyebrow">RECENT</span><h3>Recent unlocks</h3><div className="list">{events.length ? events.slice(0,8).map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">Nothing detected yet.</p>}</div></section>
           <section className="card"><span className="eyebrow">MISSED UNLOCK PROTECTION</span><h3>Automatic backfill</h3><p className="muted">If the next popup says Military Camo 5 but the tracker only had 1–3, it automatically fills Camo 4 as completed too.</p><div className="example"><span>Detected</span><b>MILITARY CAMO 5</b><span>Saved</span><b>1 → 5</b></div></section>
         </div>
       </>}
 
-      {tab==='weapons' && <><header><div><span className="eyebrow">PROGRESS</span><h2>Weapons</h2><p>Confirmed unlocks by weapon.</p></div></header><div className="weaponGrid">{weapons.length ? weapons.map(([name,w])=><section className="card weapon" key={name}><h3>{name}</h3><p>{w.unlocks?.length || 0} unlocks</p><div className="chips">{(w.unlocks||[]).map(x=><span key={x}>{x}</span>)}</div><small>Last seen: {fmtTime(w.lastSeen)}</small></section>) : <section className="card muted">No weapons tracked yet.</section>}</div></>}
+      {tab==='weapons' && <>
+        <header><div><span className="eyebrow">FULL CAMO CHECKLIST</span><h2>Weapons</h2><p>All 33 launch weapons, their camo requirements, and your saved completion status.</p></div><div className="catalogSummary"><b>{totalWeaponDone}/{totalWeaponCamos}</b><span>weapon camos complete</span></div></header>
+        <div className="filters">
+          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search weapon…" />
+          <div className="filterChips">{['All',...categories].map(x=><button key={x} className={category===x?'selected':''} onClick={()=>setCategory(x)}>{x}</button>)}</div>
+        </div>
+        <div className="weaponList">
+          {visibleWeapons.map(w => {
+            const camos = allCamosForWeapon(w);
+            const completed = doneCount(w);
+            const pct = Math.round((completed/camos.length)*100);
+            const expanded = openWeapon === w.name;
+            return <section className={'card weaponCard '+(expanded?'expanded':'')} key={w.name}>
+              <button className="weaponHeader" onClick={()=>setOpenWeapon(expanded?null:w.name)}>
+                <div><span className="classTag">{w.category}</span><h3>{w.name}</h3><small>Last detected: {fmtTime(weaponProgress(w).lastSeen)}</small></div>
+                <div className="weaponStats"><b>{completed}/{camos.length}</b><span>{pct}%</span><i>{expanded?'−':'+'}</i></div>
+              </button>
+              <div className="weaponBar"><div style={{width:`${pct}%`}}></div></div>
+              {expanded && <div className="camoTable">
+                <div className="camoHead"><span>Status</span><span>Camo</span><span>Requirement</span></div>
+                {camos.map(c => {
+                  const done = isDone(w,c.name);
+                  const uncertain = c.requirement === pending || String(c.requirement).toLowerCase().includes('verify');
+                  return <label className={'camoRow '+(done?'done':'')} key={c.name}>
+                    <span className="checkCell"><input type="checkbox" checked={done} onChange={e=>toggleCamo(w,c,e.target.checked)}/></span>
+                    <span className="camoName"><b>{c.name}</b><small className={'type '+c.type.toLowerCase()}>{c.type}</small></span>
+                    <span className="requirement">{c.requirement}{uncertain && <small className="verify">Public sources differ — verify in game</small>}{c.dmz && <small className="dmz">DMZ: {c.dmz}</small>}</span>
+                  </label>;
+                })}
+              </div>}
+            </section>;
+          })}
+        </div>
+        <section className="card globalSection">
+          <span className="eyebrow">ENDGAME / PRESTIGE</span><h3>Mastery & Weapon Prestige Camos</h3><p className="muted">These are tracked separately from each weapon checklist. Check them manually as you earn them.</p>
+          <div className="globalGrid">
+            {[...mastery.map(x=>({...x,type:'Mastery'})), ...prestige.map(x=>({...x,type:'Prestige'}))].map(c=>{
+              const done=globalUnlocks.includes(key(c.name));
+              return <label className={'globalCamo '+(done?'done':'')} key={c.name}><input type="checkbox" checked={done} onChange={e=>toggleGlobal(c.name,e.target.checked)}/><div><b>{c.name}</b><small>{c.type}</small><p>{c.requirement}</p></div></label>;
+            })}
+          </div>
+        </section>
+        <p className="sourceNote">Military rows show the weapon level that unlocks each camo challenge. Some challenge values are marked for in-game verification where current public sources disagree.</p>
+      </>}
 
       {tab==='history' && <><header><div><span className="eyebrow">EVENT LOG</span><h2>History</h2><p>Latest detector events stored locally on this PC.</p></div></header><section className="card"><div className="list">{events.length ? events.map((e,i)=><div className="row" key={i}><div><b>{e.weapon}</b><span>{e.camo || `${e.family || 'CAMO'} ${e.number || ''}`}</span><small className="raw">{e.rawText || ''}</small></div><small>{fmtTime(e.timestamp)}</small></div>) : <p className="muted">No history yet.</p>}</div></section></>}
 
