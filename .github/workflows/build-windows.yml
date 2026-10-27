@@ -50,7 +50,7 @@ jobs:
 
       - name: Build detector exe
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name detector --collect-all rapidocr_onnxruntime --collect-all onnxruntime --collect-all windows_capture --distpath worker-dist worker/detector_entry.py
+          python -m PyInstaller --noconfirm --clean --onefile --name detector --collect-all rapidocr_onnxruntime --collect-all onnxruntime --collect-all windows_capture --collect-all mss --distpath worker-dist worker/detector_entry.py
 
       - name: Install app dependencies
         run: npm install
