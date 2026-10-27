@@ -72,6 +72,7 @@ _normalize_capture_target(sys.argv)
 
 # Runtime policies are loaded before detector_entry creates capture/reference objects.
 import capture_perf  # noqa: E402,F401
+import monitor_order_policy  # noqa: E402,F401
 import reference_policy  # noqa: E402,F401
 import window_capture_policy  # noqa: E402,F401
 import detector_entry as app  # noqa: E402
