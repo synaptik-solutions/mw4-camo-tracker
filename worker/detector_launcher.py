@@ -9,6 +9,10 @@ from __future__ import annotations
 import os
 import sys
 
+from windows_dpi import enable_per_monitor_dpi_awareness
+
+enable_per_monitor_dpi_awareness()
+
 
 def _set_arg(argv, name, value):
     if name in argv:
