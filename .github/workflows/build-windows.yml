@@ -54,8 +54,8 @@ jobs:
           node --check src/bootstrap.js
           node --check src/main.js
           node --check src/preload.js
-          python -m py_compile worker/windows_dpi.py worker/capture_backend.py worker/capture_perf.py worker/reference_policy.py worker/window_capture_policy.py worker/recognition_policy.py worker/detector.py worker/detector_entry.py worker/detector_launcher.py worker/camo_reference.py
-          python -c "import sys; sys.path.insert(0, 'worker'); import windows_dpi, capture_backend, capture_perf, camo_reference, reference_policy, window_capture_policy, detector, detector_entry, recognition_policy; print('worker imports OK')"
+          python -m py_compile worker/windows_dpi.py worker/capture_backend.py worker/capture_perf.py worker/monitor_order_policy.py worker/reference_policy.py worker/window_capture_policy.py worker/recognition_policy.py worker/detector.py worker/detector_entry.py worker/detector_launcher.py worker/camo_reference.py
+          python -c "import sys; sys.path.insert(0, 'worker'); import windows_dpi, capture_backend, capture_perf, monitor_order_policy, camo_reference, reference_policy, window_capture_policy, detector, detector_entry, recognition_policy; print('worker imports OK')"
 
       - name: Build detector exe
         run: |
