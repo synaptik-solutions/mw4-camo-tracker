@@ -8,6 +8,7 @@ const electron = require('electron');
 const childProcess = require('child_process');
 
 const originalSpawn = childProcess.spawn;
+const originalExecFile = childProcess.execFile;
 
 function argIndex(args, name) {
   return Array.isArray(args) ? args.indexOf(name) : -1;
@@ -60,6 +61,22 @@ childProcess.spawn = function patchedSpawn(command, args, options) {
   const windowMode = Boolean(options?.env?.MW4_CAPTURE_WINDOW);
   const finalArgs = looksLikeDetector && !windowMode ? physicalizeDisplayBounds(args) : args;
   return originalSpawn.call(this, command, finalArgs, options);
+};
+
+// main.js intentionally uses taskkill /T /F so PyInstaller's complete process tree is removed.
+// Make only that shutdown call synchronous: app exit and updater installation should not race
+// a still-running detector.exe that may keep files or native DLLs open.
+childProcess.execFile = function patchedExecFile(command, args, options, callback) {
+  const isTaskKill = process.platform === 'win32' && String(command || '').toLowerCase() === 'taskkill' && Array.isArray(args) && args.includes('/T') && args.includes('/F');
+  if (!isTaskKill) return originalExecFile.call(this, command, args, options, callback);
+  let error = null;
+  try {
+    childProcess.execFileSync(command, args, { ...(options || {}), windowsHide:true, stdio:'ignore' });
+  } catch (err) {
+    error = err;
+  }
+  if (typeof callback === 'function') process.nextTick(() => callback(error, '', ''));
+  return { pid:null, kill:()=>false };
 };
 
 require('./main.js');
