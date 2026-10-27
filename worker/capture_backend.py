@@ -63,7 +63,7 @@ class mss:
         self._lock=threading.Lock();self._frame_event=threading.Event()
         self._latest_bgr=None;self._capture=None;self._capture_control=None;self._dxgi=None
         self._active_monitor=None;self._backend="hybrid-uninitialized";self._closed=False
-        self._legacy=None;self._native_failures=0;self._force_legacy=False
+        self._legacy=None;self._force_legacy=False
 
     @property
     def backend(self): return self._backend
@@ -161,17 +161,23 @@ class mss:
             self._backend="legacy-mss-fallback"
             return np.ascontiguousarray(shot[:,:,:3])
         try:
-            full=self._native_full_frame();self._native_failures=0
+            full=self._native_full_frame()
         except Exception:
-            self._native_failures+=1
-            if self._native_failures>=2:
-                self._start_legacy();shot=np.asarray(self._legacy.grab(region),dtype=np.uint8);return np.ascontiguousarray(shot[:,:,:3])
-            raise
+            # Never let a transient or incompatible native capture frame kill the detector.
+            # Fall back immediately; legacy MSS is slower but proven and keeps tracking alive.
+            self._start_legacy()
+            shot=np.asarray(self._legacy.grab(region),dtype=np.uint8)
+            self._backend="legacy-mss-fallback"
+            return np.ascontiguousarray(shot[:,:,:3])
         monitor=self.monitors[index]
         rel_left=int(region["left"])-monitor["left"];rel_top=int(region["top"])-monitor["top"]
         width=max(1,int(region["width"]));height=max(1,int(region["height"]))
         x0=max(0,rel_left);y0=max(0,rel_top);x1=min(full.shape[1],rel_left+width);y1=min(full.shape[0],rel_top+height)
-        if x1<=x0 or y1<=y0:raise RuntimeError("Capture region outside display")
+        if x1<=x0 or y1<=y0:
+            self._start_legacy()
+            shot=np.asarray(self._legacy.grab(region),dtype=np.uint8)
+            self._backend="legacy-mss-fallback"
+            return np.ascontiguousarray(shot[:,:,:3])
         crop=full[y0:y1,x0:x1]
         if crop.shape[:2]!=(height,width):
             out=np.zeros((height,width,3),dtype=np.uint8);dx=max(0,-rel_left);dy=max(0,-rel_top)
