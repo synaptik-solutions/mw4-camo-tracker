@@ -27,6 +27,15 @@ def _set_arg(argv, name, value):
     argv.extend([name, str(value)])
 
 
+def _remove_arg(argv, name):
+    while name in argv:
+        try:
+            pos = argv.index(name)
+            del argv[pos:pos + 2]
+        except Exception:
+            break
+
+
 def _resolve_only():
     if "--resolve-window-bounds" not in sys.argv:
         return False
@@ -46,7 +55,11 @@ _resolve_only()
 def _normalize_capture_target(argv):
     if str(os.environ.get("MW4_CAPTURE_WINDOW") or "").strip():
         # Window mode: backend exposes the bound window as source-relative monitor #1.
+        # Remove Electron display bounds entirely so detector.py derives its reference
+        # width/height from that synthetic window monitor rather than from the display.
         _set_arg(argv, "--monitor", 1)
+        for flag in ("--left", "--top", "--width", "--height"):
+            _remove_arg(argv, flag)
         return
 
     required = ("--left", "--top", "--width", "--height")
