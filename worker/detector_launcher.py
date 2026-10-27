@@ -6,6 +6,7 @@ saved capture zones remain attached to the selected game window even if it moves
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -24,6 +25,22 @@ def _set_arg(argv, name, value):
         except Exception:
             pass
     argv.extend([name, str(value)])
+
+
+def _resolve_only():
+    if "--resolve-window-bounds" not in sys.argv:
+        return False
+    from capture_backend import _find_window
+    title = str(os.environ.get("MW4_CAPTURE_WINDOW") or "").strip()
+    found = _find_window(title) if title else None
+    if not found:
+        print(json.dumps({"ok": False, "bounds": None}), flush=True)
+        raise SystemExit(2)
+    print(json.dumps({"ok": True, "title": found["title"], "bounds": found["bounds"]}), flush=True)
+    raise SystemExit(0)
+
+
+_resolve_only()
 
 
 def _normalize_capture_target(argv):
