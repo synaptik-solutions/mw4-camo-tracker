@@ -2,7 +2,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('tracker', {
   getState: () => ipcRenderer.invoke('get-state'),
-  saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  saveSettings: async (settings) => {
+    // Capture source is owned by the dedicated OBS-style source picker. The main React
+    // view can hold a stale copy of settings while that overlay is open, so never let an
+    // unrelated FPS/overlay/monitor save overwrite a newly selected window source.
+    const currentState = await ipcRenderer.invoke('get-state');
+    const current = currentState?.settings || {};
+    return ipcRenderer.invoke('save-settings', {
+      ...settings,
+      captureSourceType: current.captureSourceType,
+      captureSourceName: current.captureSourceName,
+    });
+  },
   startDetector: () => ipcRenderer.invoke('start-detector'),
   stopDetector: () => ipcRenderer.invoke('stop-detector'),
   openCaptureSetup: () => ipcRenderer.invoke('open-capture-setup'),
