@@ -3,6 +3,7 @@
 The core backend intentionally stays small. This module adds rules that matter specifically
 when a game window is selected OBS-style:
 - saved zones remain percentage-correct if the window/frame resolution changes;
+- a saved window source gets a short grace period to appear during app auto-start;
 - legacy MSS fallback is allowed only while the bound game window is foreground and visible;
 - minimized window capture returns blank pixels instead of re-reading a stale WGC frame;
 - alt-tabbed legacy fallback returns blank pixels instead of capturing desktop content behind it;
@@ -11,6 +12,7 @@ when a game window is selected OBS-style:
 from __future__ import annotations
 
 import ctypes
+import os
 import time
 
 import cv2
@@ -19,6 +21,7 @@ import numpy as np
 import capture_backend
 
 _RETRY_NATIVE_SECONDS = 15.0
+_WINDOW_START_GRACE_SECONDS = 20.0
 
 _original_init = capture_backend.mss.__init__
 _original_refresh = capture_backend.mss._refresh_window_bounds
@@ -56,6 +59,16 @@ def _window_ok_for_screen_fallback(current):
 
 
 def _init(self):
+    # Auto-start can beat COD to the desktop. Give an already-saved window source a bounded
+    # chance to appear instead of immediately killing the worker and requiring a manual restart.
+    wanted = str(os.environ.get("MW4_CAPTURE_WINDOW") or "").strip()
+    if wanted and capture_backend._find_window(wanted) is None:
+        deadline = time.monotonic() + _WINDOW_START_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(0.40)
+            if capture_backend._find_window(wanted) is not None:
+                break
+
     _original_init(self)
     if self._window_name and self._window:
         b = self._window["bounds"]
