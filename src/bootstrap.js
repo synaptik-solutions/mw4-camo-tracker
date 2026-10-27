@@ -2,7 +2,7 @@
 //
 // Electron Display.bounds / BrowserWindow bounds are DIP (logical) coordinates, while the
 // DPI-aware Python capture worker, MSS, Win32 and Windows Graphics Capture use physical
-// screen pixels. Keep Electron UI geometry untouched and convert only detector spawn args.
+// screen pixels. Keep Electron UI geometry untouched and convert only display-mode detector args.
 
 const electron = require('electron');
 const childProcess = require('child_process');
@@ -35,7 +35,7 @@ function setAfter(args, name, value) {
   if (i >= 0 && i + 1 < args.length) args[i + 1] = String(Math.round(value));
 }
 
-function physicalizeDetectorBounds(args) {
+function physicalizeDisplayBounds(args) {
   if (process.platform !== 'win32' || !Array.isArray(args)) return args;
   if (args.includes('--resolve-window-bounds')) return args;
 
@@ -67,7 +67,9 @@ function physicalizeDetectorBounds(args) {
 
 childProcess.spawn = function patchedSpawn(command, args, options) {
   const looksLikeDetector = Array.isArray(args) && args.includes('--zones') && args.includes('--fps');
-  return originalSpawn.call(this, command, looksLikeDetector ? physicalizeDetectorBounds(args) : args, options);
+  const windowMode = Boolean(options?.env?.MW4_CAPTURE_WINDOW);
+  const finalArgs = looksLikeDetector && !windowMode ? physicalizeDisplayBounds(args) : args;
+  return originalSpawn.call(this, command, finalArgs, options);
 };
 
 require('./main.js');
