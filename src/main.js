@@ -8,7 +8,8 @@ const { weapons: camoWeapons } = require('./camoCatalog');
 
 const DEFAULT_ZONES = [
   { name:'upper-right', x:0.58, y:0.05, width:0.40, height:0.40 },
-  { name:'center', x:0.27, y:0.25, width:0.46, height:0.50 }
+  { name:'center', x:0.27, y:0.25, width:0.46, height:0.50 },
+  { name:'weapon-reference', x:0.52, y:0.62, width:0.44, height:0.22 }
 ];
 const store = new Store({ defaults: { settings: { monitorIndex:1, scanFps:4, overlay:true, autoStart:true, captureZones:DEFAULT_ZONES }, progress:{ weapons:{}, events:[] } } });
 let mainWindow, overlayWindow, watchBadgeWindow, zoneOverlayWindow, detectorProcess, lastOverlayTimer;
@@ -28,6 +29,9 @@ function sanitizeZones(raw){
     x=Math.min(Math.max(x,0),.95);y=Math.min(Math.max(y,0),.95);
     width=Math.min(Math.max(width,.03),1-x);height=Math.min(Math.max(height,.03),1-y);
     zones.push({name:String(z.name||`zone-${i+1}`).toLowerCase(),x,y,width,height});
+  }
+  if(zones.length && !zones.some(z=>z.name.includes('weapon')) && zones.length<4){
+    zones.push({...DEFAULT_ZONES[2]});
   }
   return zones.length?zones:DEFAULT_ZONES.map(z=>({...z}));
 }
@@ -73,7 +77,7 @@ function captureSetupHtml(zones){
   const safe=JSON.stringify(zones).replace(/</g,'\\u003c');
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:rgba(0,0,0,.04);font-family:Segoe UI,Arial,sans-serif;user-select:none}.toolbar{position:fixed;z-index:9999;top:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:9px 12px;background:rgba(8,12,18,.92);border:1px solid #ff3b3b;border-radius:8px;color:white;font-size:12px}.toolbar b{color:#ff6b6b}.toolbar button{border:0;border-radius:6px;padding:7px 12px;font-weight:700;cursor:pointer}.zone{position:absolute;border:3px solid #ff2424;background:rgba(255,0,0,.025);min-width:60px;min-height:45px;resize:both;overflow:hidden}.zone .handle{height:28px;padding:6px 8px;background:rgba(70,0,0,.80);color:white;font-size:11px;font-weight:800;cursor:move}.zone:after{content:'RESIZE';position:absolute;right:4px;bottom:3px;color:#fff;background:#b00000;padding:2px 4px;font-size:9px;font-weight:800}.hint{opacity:.75}
-  </style></head><body><div class="toolbar"><b>CAPTURE ZONE SETUP</b><span class="hint">Drag the red title bars. Resize from the bottom-right corner.</span><button id="done">Save & close</button></div><script>const zones=${safe};const clamp=(v,a,b)=>Math.min(Math.max(v,a),b);const save=()=>window.tracker.saveCaptureZones(zones);zones.forEach((z,i)=>{const el=document.createElement('div');el.className='zone';el.style.left=(z.x*100)+'%';el.style.top=(z.y*100)+'%';el.style.width=(z.width*100)+'%';el.style.height=(z.height*100)+'%';const h=document.createElement('div');h.className='handle';h.textContent=(z.name||('zone '+(i+1))).toUpperCase()+' CAPTURE ZONE';el.appendChild(h);document.body.appendChild(el);let dragging=false,sx=0,sy=0,sl=0,st=0;h.addEventListener('pointerdown',e=>{dragging=true;sx=e.clientX;sy=e.clientY;sl=el.offsetLeft;st=el.offsetTop;h.setPointerCapture(e.pointerId)});h.addEventListener('pointermove',e=>{if(!dragging)return;const nl=clamp(sl+e.clientX-sx,0,innerWidth-el.offsetWidth),nt=clamp(st+e.clientY-sy,0,innerHeight-el.offsetHeight);el.style.left=nl+'px';el.style.top=nt+'px'});h.addEventListener('pointerup',e=>{dragging=false;z.x=el.offsetLeft/innerWidth;z.y=el.offsetTop/innerHeight;z.width=el.offsetWidth/innerWidth;z.height=el.offsetHeight/innerHeight;save()});new ResizeObserver(()=>{z.x=el.offsetLeft/innerWidth;z.y=el.offsetTop/innerHeight;z.width=clamp(el.offsetWidth/innerWidth,.03,1-z.x);z.height=clamp(el.offsetHeight/innerHeight,.03,1-z.y)}).observe(el);});document.getElementById('done').onclick=async()=>{await save();await window.tracker.closeCaptureSetup()};</script></body></html>`;
+  </style></head><body><div class="toolbar"><b>CAPTURE ZONE SETUP</b><span class="hint">Drag/resize the boxes. WEAPON-REFERENCE is gun names only and never creates an unlock by itself.</span><button id="done">Save & close</button></div><script>const zones=${safe};const clamp=(v,a,b)=>Math.min(Math.max(v,a),b);const save=()=>window.tracker.saveCaptureZones(zones);zones.forEach((z,i)=>{const el=document.createElement('div');el.className='zone';el.style.left=(z.x*100)+'%';el.style.top=(z.y*100)+'%';el.style.width=(z.width*100)+'%';el.style.height=(z.height*100)+'%';const h=document.createElement('div');h.className='handle';h.textContent=(z.name||('zone '+(i+1))).toUpperCase()+' CAPTURE ZONE';el.appendChild(h);document.body.appendChild(el);let dragging=false,sx=0,sy=0,sl=0,st=0;h.addEventListener('pointerdown',e=>{dragging=true;sx=e.clientX;sy=e.clientY;sl=el.offsetLeft;st=el.offsetTop;h.setPointerCapture(e.pointerId)});h.addEventListener('pointermove',e=>{if(!dragging)return;const nl=clamp(sl+e.clientX-sx,0,innerWidth-el.offsetWidth),nt=clamp(st+e.clientY-sy,0,innerHeight-el.offsetHeight);el.style.left=nl+'px';el.style.top=nt+'px'});h.addEventListener('pointerup',e=>{dragging=false;z.x=el.offsetLeft/innerWidth;z.y=el.offsetTop/innerHeight;z.width=el.offsetWidth/innerWidth;z.height=el.offsetHeight/innerHeight;save()});new ResizeObserver(()=>{z.x=el.offsetLeft/innerWidth;z.y=el.offsetTop/innerHeight;z.width=clamp(el.offsetWidth/innerWidth,.03,1-z.x);z.height=clamp(el.offsetHeight/innerHeight,.03,1-z.y)}).observe(el);});document.getElementById('done').onclick=async()=>{await save();await window.tracker.closeCaptureSetup()};</script></body></html>`;
 }
 function openCaptureSetup(){
   stopDetector();const s=getSettings(),m=getMonitors(),d=m[s.monitorIndex]||m[1]||m[0];if(!d)return false;
