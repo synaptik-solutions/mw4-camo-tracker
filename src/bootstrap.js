@@ -8,16 +8,6 @@ const electron = require('electron');
 const childProcess = require('child_process');
 
 const originalSpawn = childProcess.spawn;
-const originalSetTimeout = global.setTimeout;
-
-// main.js uses a 2200 ms watchdog only for the small --resolve-window-bounds helper.
-// A PyInstaller one-file executable may spend a few seconds unpacking on first launch or
-// while antivirus scans it. Give that resolver a realistic window without slowing any of
-// the app's normal timers (overlay hide, auto-start, updater checks, etc.).
-global.setTimeout = function patchedSetTimeout(callback, delay, ...args) {
-  const effectiveDelay = Number(delay) === 2200 ? 6000 : delay;
-  return originalSetTimeout(callback, effectiveDelay, ...args);
-};
 
 function argIndex(args, name) {
   return Array.isArray(args) ? args.indexOf(name) : -1;
