@@ -19,21 +19,23 @@ matcher = CamoReferenceMatcher()
 matcher.start_async()
 
 _state = {
-    "match": None,
-    "match_time": 0.0,
-    "last_match_run": 0.0,
+    "matches": {},
+    "match_times": {},
+    "last_match_run": {},
     "current_zone": None,
     "weapon_anchor": None,
     "weapon_anchor_time": 0.0,
+    "capture_backend": None,
 }
 _region_names = {}
 
 
-def _fresh_match(max_age=1.35):
-    match = _state.get("match")
+def _fresh_match(zone_name=None, max_age=1.35):
+    zone = str(zone_name or _state.get("current_zone") or "unknown").lower()
+    match = _state["matches"].get(zone)
     if not match:
         return None
-    if time.monotonic() - float(_state.get("match_time") or 0.0) > max_age:
+    if time.monotonic() - float(_state["match_times"].get(zone) or 0.0) > max_age:
         return None
     return match
 
@@ -73,21 +75,32 @@ _original_grab = capture_mss.mss.grab
 def _grab_with_image_match(self, region):
     frame = _original_grab(self, region)
     now = time.monotonic()
-    _state["current_zone"] = _region_names.get(_region_key(region))
-    if "weapon" in str(_state.get("current_zone") or ""):
-        _state["match"] = None; _state["match_time"] = 0.0
+    zone_name = str(_region_names.get(_region_key(region)) or "unknown").lower()
+    _state["current_zone"] = zone_name
+    _state["capture_backend"] = getattr(self, "backend", None)
+
+    if "weapon" in zone_name:
+        _state["matches"].pop(zone_name, None)
+        _state["match_times"].pop(zone_name, None)
         return frame
-    if matcher.ready and now - _state["last_match_run"] >= 0.06:
-        _state["last_match_run"] = now
+
+    last_run = float(_state["last_match_run"].get(zone_name) or 0.0)
+    if matcher.ready and now - last_run >= 0.06:
+        _state["last_match_run"][zone_name] = now
         try:
             bgr = np.asarray(frame, dtype=np.uint8)[:, :, :3]
             match = matcher.match_frame(bgr)
         except Exception:
             match = None
-        _state["match"] = match
-        _state["match_time"] = now if match else 0.0
+        if match:
+            _state["matches"][zone_name] = match
+            _state["match_times"][zone_name] = now
+        else:
+            _state["matches"].pop(zone_name, None)
+            _state["match_times"].pop(zone_name, None)
     elif not matcher.ready:
-        _state["match"] = None; _state["match_time"] = 0.0
+        _state["matches"].pop(zone_name, None)
+        _state["match_times"].pop(zone_name, None)
     return frame
 
 capture_mss.mss.grab = _grab_with_image_match
@@ -96,7 +109,7 @@ _original_parse = core.parse_candidate
 
 def _parse_with_image_crosscheck(lines):
     clean = [core.normalize_ocr_line(x) for x in lines if x and str(x).strip()]
-    zone_name = str(_state.get("current_zone") or "").lower()
+    zone_name = str(_state.get("current_zone") or "unknown").lower()
     if "weapon" in zone_name:
         weapon = core.fuzzy_weapon(clean)
         if weapon:
@@ -105,7 +118,7 @@ def _parse_with_image_crosscheck(lines):
         return None
 
     candidate = _original_parse(lines)
-    image_match = _fresh_match()
+    image_match = _fresh_match(zone_name)
     anchor = _fresh_weapon()
     if candidate:
         if (not candidate.get("weapon") or candidate.get("weapon") == "UNKNOWN") and anchor:
@@ -135,7 +148,8 @@ _original_read = core.read_frame_variants
 
 def _read_with_image_vote(ocr, bgr, aggressive=False):
     lines, confidence = _original_read(ocr, bgr, aggressive=aggressive)
-    image_match = _fresh_match()
+    zone_name = str(_state.get("current_zone") or "unknown").lower()
+    image_match = _fresh_match(zone_name)
     if image_match and image_match["score"] >= 0.66:
         joined = " ".join(core.normalize_ocr_line(x).upper() for x in lines)
         parsed = _original_parse(lines)
@@ -158,11 +172,37 @@ _original_emit = core.emit
 def _emit_with_image_status(payload):
     if isinstance(payload,dict):
         if payload.get("type")=="status" and payload.get("message")=="detector-ready":
-            payload=dict(payload);payload["camoImageMatching"]=True;payload["weaponReferenceZone"]=True;payload["imageReferenceReady"]=matcher.ready;payload["imageReferenceCount"]=matcher.count
+            payload=dict(payload)
+            payload["camoImageMatching"]=True
+            payload["weaponReferenceZone"]=True
+            payload["imageReferenceReady"]=matcher.ready
+            payload["imageReferenceCount"]=matcher.count
+            payload["captureBackend"]=_state.get("capture_backend")
         elif payload.get("type")=="capture-health":
-            payload=dict(payload);current=_fresh_match(1.8);payload["imageReferenceReady"]=matcher.ready;payload["imageReferenceCount"]=matcher.count;payload["imageReferenceError"]=matcher.last_error;payload["lastImageMatch"]=current.get("name") if current else None;payload["lastImageScore"]=round(float(current.get("score") or 0.0),3) if current else 0.0;payload["weaponAnchor"]=_fresh_weapon();payload["captureBackend"] = getattr(getattr(core,"_active_capture",None),"backend",None)
+            payload=dict(payload)
+            zones=[]
+            for item in payload.get("zones",[]):
+                z=dict(item)
+                zone_name=str(z.get("name") or "unknown").lower()
+                current=_fresh_match(zone_name,1.8)
+                z["imageMatch"]=current.get("name") if current else None
+                z["imageScore"]=round(float(current.get("score") or 0.0),3) if current else 0.0
+                zones.append(z)
+            payload["zones"]=zones
+            payload["imageReferenceReady"]=matcher.ready
+            payload["imageReferenceCount"]=matcher.count
+            payload["imageReferenceError"]=matcher.last_error
+            payload["weaponAnchor"]=_fresh_weapon()
+            payload["captureBackend"]=_state.get("capture_backend")
         elif payload.get("type")=="ocr-debug":
-            payload=dict(payload);current=_fresh_match(1.5);payload["imageMatch"]=current.get("name") if current else None;payload["imageScore"]=round(float(current.get("score") or 0.0),3) if current else 0.0;payload["activeZone"]=_state.get("current_zone");payload["weaponAnchor"]=_fresh_weapon()
+            payload=dict(payload)
+            zone_name=str(payload.get("zone") or _state.get("current_zone") or "unknown").lower()
+            current=_fresh_match(zone_name,1.5)
+            payload["imageMatch"]=current.get("name") if current else None
+            payload["imageScore"]=round(float(current.get("score") or 0.0),3) if current else 0.0
+            payload["activeZone"]=zone_name
+            payload["weaponAnchor"]=_fresh_weapon()
+            payload["captureBackend"]=_state.get("capture_backend")
     _original_emit(payload)
 
 core.emit = _emit_with_image_status
