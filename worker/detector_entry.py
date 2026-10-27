@@ -1,4 +1,4 @@
-"""Detector entrypoint that layers thumbnail cross-checking onto the stable OCR worker."""
+"""Detector entrypoint that layers thumbnail cross-checking and weapon anchoring onto OCR."""
 
 from __future__ import annotations
 
@@ -18,16 +18,29 @@ _state = {
     "match": None,
     "match_time": 0.0,
     "last_match_run": 0.0,
+    "current_zone": None,
+    "weapon_anchor": None,
+    "weapon_anchor_time": 0.0,
 }
+_region_names = {}
 
 
-def _fresh_match(max_age=0.9):
+def _fresh_match(max_age=1.35):
     match = _state.get("match")
     if not match:
         return None
     if time.monotonic() - float(_state.get("match_time") or 0.0) > max_age:
         return None
     return match
+
+
+def _fresh_weapon(max_age=12.0):
+    weapon = _state.get("weapon_anchor")
+    if not weapon:
+        return None
+    if time.monotonic() - float(_state.get("weapon_anchor_time") or 0.0) > max_age:
+        return None
+    return weapon
 
 
 def _name_similarity(a, b):
@@ -38,18 +51,46 @@ def _name_similarity(a, b):
     return difflib.SequenceMatcher(None, ca, cb).ratio()
 
 
-# Capture each region exactly as before, but run the cheap thumbnail matcher against the
-# same pixels. This keeps image matching synchronized with the OCR frame without changing
-# monitor/capture behavior.
+def _region_key(region):
+    return (
+        int(region.get("left", 0)),
+        int(region.get("top", 0)),
+        int(region.get("width", 0)),
+        int(region.get("height", 0)),
+    )
+
+
+# Remember which physical rectangle belongs to which configured setup zone. This lets the
+# third weapon-reference box behave differently without rewriting detector.py's stable loop.
+_original_scaled_region = core.scaled_region
+
+
+def _scaled_region_with_name(monitor, reference_width, reference_height, scale_x, scale_y, spec):
+    region = _original_scaled_region(monitor, reference_width, reference_height, scale_x, scale_y, spec)
+    _region_names[_region_key(region)] = str(spec.get("name") or "").lower()
+    return region
+
+
+core.scaled_region = _scaled_region_with_name
+
+
+# Capture each region exactly as before, but tag the active zone and run the thumbnail matcher
+# against the same pixels. The active-zone tag is consumed immediately by parse_candidate.
 _original_grab = capture_mss.mss.grab
 
 
 def _grab_with_image_match(self, region):
     frame = _original_grab(self, region)
     now = time.monotonic()
-    # At the detector's 4 Hz ceiling this normally runs once per grabbed frame. Keep a small
-    # guard anyway so two overlapping zones do not waste CPU within the same instant.
-    if matcher.ready and now - _state["last_match_run"] >= 0.08:
+    _state["current_zone"] = _region_names.get(_region_key(region))
+
+    # Do not spend image-matching work in the weapon-name-only reference box.
+    if "weapon" in str(_state.get("current_zone") or ""):
+        _state["match"] = None
+        _state["match_time"] = 0.0
+        return frame
+
+    if matcher.ready and now - _state["last_match_run"] >= 0.06:
         _state["last_match_run"] = now
         try:
             array = np.asarray(frame, dtype=np.uint8)
@@ -68,34 +109,50 @@ def _grab_with_image_match(self, region):
 capture_mss.mss.grab = _grab_with_image_match
 
 
-# Add the image result to parsed OCR candidates. Exact family/number text still comes from
-# OCR; an image never changes MILITARY CAMO 8 into another number. Named camos may be
-# corrected to the canonical image-library spelling when the visual and OCR names agree.
+# Add the image result to OCR candidates and maintain a dedicated weapon-name anchor.
 _original_parse = core.parse_candidate
 
 
 def _parse_with_image_crosscheck(lines):
+    clean = [core.normalize_ocr_line(x) for x in lines if x and str(x).strip()]
+    zone_name = str(_state.get("current_zone") or "").lower()
+
+    # The third box is strictly a weapon reference area. It never creates an unlock by itself.
+    # It only refreshes the current weapon anchor used by camo boxes when their weapon OCR fails.
+    if "weapon" in zone_name:
+        weapon = core.fuzzy_weapon(clean)
+        if weapon:
+            _state["weapon_anchor"] = weapon
+            _state["weapon_anchor_time"] = time.monotonic()
+        return None
+
     candidate = _original_parse(lines)
     image_match = _fresh_match()
+    anchor = _fresh_weapon()
 
-    if candidate and image_match:
-        candidate["imageMatch"] = image_match["name"]
-        candidate["imageScore"] = float(image_match["score"])
-        if candidate.get("kind") == "named":
-            agreement = _name_similarity(candidate.get("camo"), image_match.get("name"))
-            candidate["imageAgreement"] = agreement
-            if image_match["score"] >= 0.72 and agreement >= 0.66:
-                candidate["camo"] = image_match["name"]
+    if candidate:
+        if (not candidate.get("weapon") or candidate.get("weapon") == "UNKNOWN") and anchor:
+            candidate["weapon"] = anchor
+            candidate["weaponAnchored"] = True
+
+        if image_match:
+            candidate["imageMatch"] = image_match["name"]
+            candidate["imageScore"] = float(image_match["score"])
+            if candidate.get("kind") == "named":
+                agreement = _name_similarity(candidate.get("camo"), image_match.get("name"))
+                candidate["imageAgreement"] = agreement
+                # Slightly looser only because OCR + image agreement are independent signals.
+                if image_match["score"] >= 0.66 and agreement >= 0.58:
+                    candidate["camo"] = image_match["name"]
         return candidate
 
-    # Recovery mode: OCR got enough of the card to identify the weapon but failed to read
-    # the camo line. Only a very strong thumbnail match can create a named-camo candidate.
-    if candidate is None and image_match and image_match["score"] >= 0.86:
-        clean = [core.normalize_ocr_line(x) for x in lines if x and str(x).strip()]
-        weapon = core.fuzzy_weapon(clean)
+    # Recovery mode: image matching may recover a named camo if we can identify the weapon
+    # either from this card or from the dedicated weapon-reference box.
+    if image_match and image_match["score"] >= 0.80:
+        weapon = core.fuzzy_weapon(clean) or anchor
         joined = " | ".join(clean)
         upper = joined.upper()
-        context_ok = "UNLOCK" in upper or "CAMO" in upper or image_match["score"] >= 0.92
+        context_ok = "UNLOCK" in upper or "CAMO" in upper or image_match["score"] >= 0.88
         if weapon and context_ok:
             return {
                 "kind": "named",
@@ -106,6 +163,7 @@ def _parse_with_image_crosscheck(lines):
                 "imageScore": float(image_match["score"]),
                 "imageAgreement": 1.0,
                 "imageRecovered": True,
+                "weaponAnchored": bool(anchor and weapon == anchor),
             }
 
     return candidate
@@ -114,28 +172,26 @@ def _parse_with_image_crosscheck(lines):
 core.parse_candidate = _parse_with_image_crosscheck
 
 
-# A strong image hit is an independent visual vote. We only boost OCR confidence when the
-# OCR itself sees unlock/camo-like text or already parses a candidate, preventing colorful
-# gameplay from becoming a false unlock.
+# A medium/strong image hit is an independent visual vote, but only when OCR sees unlock-like
+# text or already parses a candidate. This improves recall without trusting gameplay imagery alone.
 _original_read = core.read_frame_variants
 
 
 def _read_with_image_vote(ocr, bgr, aggressive=False):
     lines, confidence = _original_read(ocr, bgr, aggressive=aggressive)
     image_match = _fresh_match()
-    if image_match and image_match["score"] >= 0.74:
+    if image_match and image_match["score"] >= 0.66:
         joined = " ".join(core.normalize_ocr_line(x).upper() for x in lines)
         parsed = _original_parse(lines)
         if parsed or "CAMO" in joined or "UNLOCK" in joined:
-            confidence = max(float(confidence), min(0.64, 0.36 + image_match["score"] * 0.30))
+            confidence = max(float(confidence), min(0.66, 0.35 + image_match["score"] * 0.34))
     return lines, confidence
 
 
 core.read_frame_variants = _read_with_image_vote
 
 
-# Surface image evidence in the unlock event and capture diagnostics so misses can be
-# diagnosed without guessing whether OCR, popup layout, or thumbnail matching failed.
+# Surface image and weapon-reference evidence in unlock events and diagnostics.
 def _emit_candidate(candidate, confidence, zone_name):
     payload = {
         "type": "unlock",
@@ -151,6 +207,7 @@ def _emit_candidate(candidate, confidence, zone_name):
         "imageScore": round(float(candidate.get("imageScore") or 0.0), 3),
         "imageAgreement": round(float(candidate.get("imageAgreement") or 0.0), 3),
         "imageRecovered": bool(candidate.get("imageRecovered")),
+        "weaponAnchored": bool(candidate.get("weaponAnchored")),
     }
     core.emit(payload)
     return (payload.get("weapon"), payload.get("family"), payload.get("number"), payload.get("camo"))
@@ -166,21 +223,25 @@ def _emit_with_image_status(payload):
         if payload.get("type") == "status" and payload.get("message") == "detector-ready":
             payload = dict(payload)
             payload["camoImageMatching"] = True
+            payload["weaponReferenceZone"] = True
             payload["imageReferenceReady"] = matcher.ready
             payload["imageReferenceCount"] = matcher.count
         elif payload.get("type") == "capture-health":
             payload = dict(payload)
-            current = _fresh_match(1.5)
+            current = _fresh_match(1.8)
             payload["imageReferenceReady"] = matcher.ready
             payload["imageReferenceCount"] = matcher.count
             payload["imageReferenceError"] = matcher.last_error
             payload["lastImageMatch"] = current.get("name") if current else None
             payload["lastImageScore"] = round(float(current.get("score") or 0.0), 3) if current else 0.0
+            payload["weaponAnchor"] = _fresh_weapon()
         elif payload.get("type") == "ocr-debug":
             payload = dict(payload)
-            current = _fresh_match(1.0)
+            current = _fresh_match(1.5)
             payload["imageMatch"] = current.get("name") if current else None
             payload["imageScore"] = round(float(current.get("score") or 0.0), 3) if current else 0.0
+            payload["activeZone"] = _state.get("current_zone")
+            payload["weaponAnchor"] = _fresh_weapon()
     _original_emit(payload)
 
 
