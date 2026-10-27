@@ -62,6 +62,8 @@ import capture_perf  # noqa: E402,F401
 import reference_policy  # noqa: E402,F401
 import window_capture_policy  # noqa: E402,F401
 import detector_entry as app  # noqa: E402
+# recognition_policy wraps detector_entry after its OCR/image hooks exist.
+import recognition_policy  # noqa: E402,F401
 
 if __name__ == "__main__":
     try:
