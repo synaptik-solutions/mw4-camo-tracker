@@ -37,7 +37,14 @@ contextBridge.exposeInMainWorld('tracker', {
   onDetectorState: (callback) => ipcRenderer.on('detector-state', (_, data) => callback(data)),
   onDetectorEvent: (callback) => ipcRenderer.on('detector-event', (_, data) => callback(data)),
   onDetectorError: (callback) => ipcRenderer.on('detector-error', (_, data) => callback(data)),
-  onDetectorMessage: (callback) => ipcRenderer.on('detector-message', (_, data) => callback(data)),
+  onDetectorMessage: (callback) => ipcRenderer.on('detector-message', (_, data) => {
+    // The React diagnostics header already renders status.monitorSource. Promote the real
+    // runtime backend from capture-health into that channel after capture has actually begun.
+    if (data?.type === 'capture-health' && data.captureBackend) {
+      callback({ type:'status', monitorSource:data.captureBackend, captureBackend:data.captureBackend });
+    }
+    callback(data);
+  }),
   onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, data) => callback(data)),
   onOverlayEvent: (callback) => ipcRenderer.on('overlay-event', (_, data) => callback(data))
 });
