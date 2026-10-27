@@ -60,6 +60,12 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --name detector --collect-all rapidocr_onnxruntime --collect-all onnxruntime --collect-all windows_capture --collect-all mss --distpath worker-dist worker/detector_launcher.py
 
+      - name: Smoke test packaged detector
+        shell: pwsh
+        run: |
+          & .\worker-dist\detector.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "Packaged detector failed smoke test with exit code $LASTEXITCODE" }
+
       - name: Install app dependencies
         run: npm install
 
