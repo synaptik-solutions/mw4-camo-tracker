@@ -4,8 +4,8 @@ The core backend intentionally stays small. This module adds rules that matter s
 when a game window is selected OBS-style:
 - saved zones remain percentage-correct if the window/frame resolution changes;
 - legacy MSS fallback is allowed only while the bound game window is foreground and visible;
-- minimized/alt-tabbed window fallback returns blank pixels instead of capturing whatever
-  desktop content happens to be behind the game;
+- minimized window capture returns blank pixels instead of re-reading a stale WGC frame;
+- alt-tabbed legacy fallback returns blank pixels instead of capturing desktop content behind it;
 - native WGC is retried periodically after a fallback instead of remaining on MSS forever.
 """
 from __future__ import annotations
@@ -31,14 +31,23 @@ def _blank(region):
     return np.zeros((max(1, int(region.get("height", 1))), max(1, int(region.get("width", 1))), 3), dtype=np.uint8)
 
 
-def _window_ok_for_screen_fallback(current):
+def _window_ok_for_native(current):
     if not current:
         return False
     try:
         user32 = ctypes.windll.user32
         hwnd = int(current["hwnd"])
-        if not user32.IsWindow(hwnd) or user32.IsIconic(hwnd) or not user32.IsWindowVisible(hwnd):
-            return False
+        return bool(user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd))
+    except Exception:
+        return False
+
+
+def _window_ok_for_screen_fallback(current):
+    if not _window_ok_for_native(current):
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = int(current["hwnd"])
         # MSS is a desktop grab, not true window capture. Only trust the rectangle when the
         # selected game is foreground; otherwise another app may be covering those pixels.
         return int(user32.GetForegroundWindow() or 0) == hwnd
@@ -126,6 +135,11 @@ def _legacy_window_grab(self, region):
 
 
 def _window_grab(self, region):
+    current = self._refresh_window_bounds()
+    if not _window_ok_for_native(current):
+        self._backend = "window-paused-minimized-or-closed"
+        return _blank(region)
+
     index = 1
     self._ensure_capture(index)
     if self._force_legacy:
