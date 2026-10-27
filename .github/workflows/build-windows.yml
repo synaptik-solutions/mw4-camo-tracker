@@ -48,6 +48,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r worker/requirements.txt pyinstaller
 
+      - name: Validate source syntax
+        shell: pwsh
+        run: |
+          node --check src/main.js
+          node --check src/preload.js
+          python -m py_compile worker/capture_backend.py worker/detector.py worker/detector_entry.py worker/detector_launcher.py worker/camo_reference.py
+          python -c "import sys; sys.path.insert(0, 'worker'); import capture_backend, detector, detector_entry; print('worker imports OK')"
+
       - name: Build detector exe
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --name detector --collect-all rapidocr_onnxruntime --collect-all onnxruntime --collect-all windows_capture --collect-all mss --distpath worker-dist worker/detector_launcher.py
