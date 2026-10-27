@@ -6,7 +6,7 @@ Display mode:
 3. python-mss
 
 Window mode (MW4_CAPTURE_WINDOW env var):
-1. Windows Graphics Capture bound to the selected window title
+1. Windows Graphics Capture bound to the resolved HWND
 2. python-mss of that window's real Win32 rectangle when native window capture fails
 
 The public API intentionally matches the tiny subset used by detector.py: mss().monitors
@@ -138,7 +138,7 @@ class mss:
         self._lock = threading.Lock(); self._frame_event = threading.Event()
         self._latest_bgr = None; self._capture = None; self._capture_control = None; self._dxgi = None
         self._active_monitor = None; self._backend = "hybrid-uninitialized"; self._closed = False
-        self._legacy = None; self._force_legacy = False
+        self._legacy = None; self._force_legacy = False; self._native_closed = False
 
     @property
     def backend(self):
@@ -194,19 +194,22 @@ class mss:
             try: self._capture_control.stop()
             except Exception: pass
         self._capture_control = None; self._capture = None; self._dxgi = None; self._active_monitor = None
+        self._native_closed = False
 
     def _start_wgc(self, index):
         if WindowsCapture is None:
             raise RuntimeError(f"windows-capture unavailable: {_IMPORT_ERROR}")
-        self._frame_event.clear(); self._latest_bgr = None
-        kwargs = dict(cursor_capture=False, draw_border=False, minimum_update_interval=80, dirty_region=True)
+        self._frame_event.clear(); self._latest_bgr = None; self._native_closed = False
+        kwargs = dict(cursor_capture=False, draw_border=False, minimum_update_interval=100, dirty_region=True)
         if self._window_name:
             current = self._refresh_window_bounds()
             if not current:
                 raise RuntimeError(f"Bound capture window disappeared: {self._window_name}")
-            kwargs.update(monitor_index=None, window_name=current["title"])
+            # HWND binding is more deterministic than title/substring matching and survives
+            # title text changes while this game-window instance remains open.
+            kwargs.update(monitor_index=None, window_name=None, window_hwnd=int(current["hwnd"]))
         else:
-            kwargs.update(monitor_index=max(1, int(index)), window_name=None)
+            kwargs.update(monitor_index=max(1, int(index)), window_name=None, window_hwnd=None)
         capture = WindowsCapture(**kwargs)
 
         @capture.event
@@ -214,16 +217,24 @@ class mss:
             if self._closed:
                 return
             try:
+                # One owned copy is required because the callback frame buffer is transient.
+                # Subsequent zone reads reuse this immutable array rather than copying the
+                # entire 1440p/4K frame again for every OCR zone.
                 image = np.ascontiguousarray(frame.to_bgr()).copy()
                 if _valid_frame(image):
                     with self._lock:
                         self._latest_bgr = image
+                        self._native_closed = False
                     self._frame_event.set()
             except Exception:
                 pass
 
         @capture.event
         def on_closed():
+            # Never keep serving the last valid frame after the game window/capture item closes.
+            with self._lock:
+                self._latest_bgr = None
+                self._native_closed = True
             self._frame_event.set()
 
         control = capture.start_free_threaded()
@@ -269,7 +280,9 @@ class mss:
         if self._capture is not None:
             self._frame_event.wait(.30)
             with self._lock:
-                image = None if self._latest_bgr is None else self._latest_bgr.copy()
+                if self._native_closed:
+                    raise RuntimeError("Windows capture item closed")
+                image = self._latest_bgr
             if not _valid_frame(image):
                 raise RuntimeError("WGC frame invalid")
             return image
