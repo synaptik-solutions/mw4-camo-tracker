@@ -6,7 +6,13 @@ contextBridge.exposeInMainWorld('tracker', {
   startDetector: () => ipcRenderer.invoke('start-detector'),
   stopDetector: () => ipcRenderer.invoke('stop-detector'),
   openCaptureSetup: () => ipcRenderer.invoke('open-capture-setup'),
-  saveCaptureSource: (source) => ipcRenderer.invoke('save-capture-source', source),
+  saveCaptureSource: async (source) => {
+    const result = await ipcRenderer.invoke('save-capture-source', source);
+    // Rebuild the setup surface against the new source so any boxes that were dragged
+    // into pixel coordinates cannot retain geometry from the previous display/window.
+    await ipcRenderer.invoke('open-capture-setup');
+    return result;
+  },
   saveCaptureZones: (zones) => ipcRenderer.invoke('save-capture-zones', zones),
   closeCaptureSetup: () => ipcRenderer.invoke('close-capture-setup'),
   resetCaptureZones: () => ipcRenderer.invoke('reset-capture-zones'),
