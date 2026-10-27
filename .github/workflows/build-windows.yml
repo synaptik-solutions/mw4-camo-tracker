@@ -92,5 +92,22 @@ jobs:
           $assets += Get-ChildItem dist -Filter "*.exe" | ForEach-Object { $_.FullName }
           $assets += Get-ChildItem dist -Filter "*.blockmap" | ForEach-Object { $_.FullName }
           if (Test-Path "dist/latest.yml") { $assets += (Resolve-Path "dist/latest.yml").Path }
-          if ($assets.Count -lt 2) { throw "Updater metadata was not generated." }
-          gh release create $tag @assets --title "MW4 Camo Tracker $env:APP_VERSION" --notes "Windows-native capture release $env:APP_VERSION" --latest
+          if ($assets.Count -lt 3) { throw "Installer, blockmap, and updater metadata were not all generated." }
+
+          # Keep a partial upload invisible to electron-updater. Only publish after every
+          # required asset was accepted by GitHub successfully.
+          gh release create $tag @assets --title "MW4 Camo Tracker $env:APP_VERSION" --notes "Windows-native capture release $env:APP_VERSION" --draft
+          if ($LASTEXITCODE -ne 0) { throw "Draft release upload failed." }
+
+          $uploaded = gh release view $tag --json assets --jq '.assets[].name'
+          $expected = @(
+            (Get-ChildItem dist -Filter "*.exe" | Select-Object -First 1).Name,
+            (Get-ChildItem dist -Filter "*.blockmap" | Select-Object -First 1).Name,
+            "latest.yml"
+          )
+          foreach ($name in $expected) {
+            if (-not ($uploaded -contains $name)) { throw "Release asset missing after upload: $name" }
+          }
+
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Release could not be published." }
