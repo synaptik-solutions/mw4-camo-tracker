@@ -293,7 +293,9 @@ def main():
     p.add_argument("--zones", type=str, default="")
     args = p.parse_args()
 
-    fps = min(max(args.fps, 1.0), 4.0)
+    # UI supports 2/4/6 checks per second. 4 remains the recommended default; 6 is an
+    # opt-in faster scan mode and stays below the native capture backend's ~10 Hz request.
+    fps = min(max(args.fps, 1.0), 6.0)
     interval = 1.0 / fps
     try:
         cv2.setNumThreads(1)
