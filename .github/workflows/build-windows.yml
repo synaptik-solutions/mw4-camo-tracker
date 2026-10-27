@@ -51,6 +51,7 @@ jobs:
       - name: Validate source syntax
         shell: pwsh
         run: |
+          node --check src/bootstrap.js
           node --check src/main.js
           node --check src/preload.js
           python -m py_compile worker/windows_dpi.py worker/capture_backend.py worker/capture_perf.py worker/reference_policy.py worker/window_capture_policy.py worker/recognition_policy.py worker/detector.py worker/detector_entry.py worker/detector_launcher.py worker/camo_reference.py
