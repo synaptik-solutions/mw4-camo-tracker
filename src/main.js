@@ -108,8 +108,8 @@ function resolveWindowBounds(name){
     const finish=value=>{if(settled)return;settled=true;resolve(value);};
     child.stdout.on('data',d=>out+=d.toString());
     child.on('error',()=>finish(null));
-    child.on('exit',()=>{try{const parsed=JSON.parse(out.trim());const b=parsed?.bounds;if(b&&[b.left,b.top,b.width,b.height].every(Number.isFinite)&&b.width>40&&b.height>40)finish(b);else finish(null);}catch(_){finish(null);}});
-    setTimeout(()=>{try{child.kill();}catch(_){ }finish(null);},2200);
+    child.on('exit',()=>{try{const parsed=JSON.parse(out.trim());const b=parsed?.bounds;if(b&&[b.left,b.top,b.width,b.height].every(Number.isFinite)&&b.width>40&&b.height>40){const dip=process.platform==='win32'?screen.screenToDipRect(null,{x:b.left,y:b.top,width:b.width,height:b.height}):{x:b.left,y:b.top,width:b.width,height:b.height};finish(dip);}else finish(null);}catch(_){finish(null);}});
+    setTimeout(()=>{try{child.kill();}catch(_){ }finish(null);},6000);
   });
 }
 function captureSetupHtml(zones,sources,settings){
