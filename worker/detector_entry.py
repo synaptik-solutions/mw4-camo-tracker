@@ -14,6 +14,12 @@ from camo_reference import CamoReferenceMatcher
 # detector.py imports the normal mss API, but this entrypoint replaces it with our hybrid
 # Windows -> DXGI -> real MSS backend before core.main() creates its capture object.
 core.mss = capture_mss
+# Keep the emergency/default zone set aligned with Electron even if --zones is missing/bad.
+core.DEFAULT_ZONES = [
+    {"name": "upper-right", "x": 0.58, "y": 0.05, "width": 0.40, "height": 0.40},
+    {"name": "center", "x": 0.27, "y": 0.25, "width": 0.46, "height": 0.50},
+    {"name": "weapon-reference", "x": 0.52, "y": 0.62, "width": 0.44, "height": 0.22},
+]
 
 matcher = CamoReferenceMatcher()
 matcher.start_async()
@@ -28,6 +34,7 @@ _state = {
     "capture_backend": None,
 }
 _region_names = {}
+_COMPLETIONIST_NAMES = ("Gold", "Platinum", "Harmonic Break")
 
 
 def _fresh_match(zone_name=None, max_age=1.35):
@@ -55,6 +62,52 @@ def _name_similarity(a, b):
     if not ca or not cb:
         return 0.0
     return difflib.SequenceMatcher(None, ca, cb).ratio()
+
+
+def _unambiguous_weapon(lines):
+    """Return a weapon only when the reference zone supports one clear gun.
+
+    End-of-match recap screens can contain several weapon rows at once. In that case we
+    deliberately avoid setting an anchor rather than attaching camos to the wrong gun.
+    """
+    matched = set()
+    for raw in lines:
+        candidate = core.normalize_ocr_line(raw).strip(" -|:[]()")
+        upper = candidate.upper()
+        if not candidate or "CAMO" in upper or "UNLOCK" in upper or len(candidate) > 45:
+            continue
+        comp = core.compact_text(candidate)
+        if len(comp) < 2:
+            continue
+        best_name, best_score = None, 0.0
+        for weapon in core.KNOWN_WEAPONS:
+            score = difflib.SequenceMatcher(None, comp, core.compact_text(weapon)).ratio()
+            if score > best_score:
+                best_name, best_score = weapon, score
+        if best_name and best_score >= 0.68:
+            matched.add(best_name)
+            if len(matched) > 1:
+                return None
+    return next(iter(matched)) if len(matched) == 1 else None
+
+
+def _best_line_agreement(lines, name):
+    best = 0.0
+    for line in lines:
+        cleaned = core.normalize_ocr_line(line)
+        cleaned = cleaned.replace("UNLOCKED", "").replace("CAMO", "").strip(" -|:[]()")
+        if cleaned:
+            best = max(best, _name_similarity(cleaned, name))
+    return best
+
+
+def _completionist_from_text(lines):
+    best_name, best_score = None, 0.0
+    for name in _COMPLETIONIST_NAMES:
+        score = _best_line_agreement(lines, name)
+        if score > best_score:
+            best_name, best_score = name, score
+    return best_name if best_score >= 0.74 else None
 
 
 def _region_key(region):
@@ -111,7 +164,7 @@ def _parse_with_image_crosscheck(lines):
     clean = [core.normalize_ocr_line(x) for x in lines if x and str(x).strip()]
     zone_name = str(_state.get("current_zone") or "unknown").lower()
     if "weapon" in zone_name:
-        weapon = core.fuzzy_weapon(clean)
+        weapon = _unambiguous_weapon(clean)
         if weapon:
             _state["weapon_anchor"] = weapon
             _state["weapon_anchor_time"] = time.monotonic()
@@ -134,10 +187,33 @@ def _parse_with_image_crosscheck(lines):
                     candidate["camo"] = image_match["name"]
         return candidate
 
+    weapon = core.fuzzy_weapon(clean) or anchor
+    joined = " | ".join(clean)
+    upper = joined.upper()
+
+    # Completionist titles are sometimes rendered without the literal word CAMO.
+    completionist = _completionist_from_text(clean)
+    if completionist and weapon:
+        return {
+            "kind": "named", "weapon": weapon, "camo": completionist,
+            "rawText": joined, "weaponAnchored": bool(anchor and weapon == anchor),
+            "textRecovered": True,
+        }
+
+    # A moderate image match may recover a named camo when OCR independently reads a
+    # similar title even if the UI omits the word CAMO. Requiring both signals avoids
+    # making the thumbnail database a single-point source of false unlocks.
+    if image_match and weapon:
+        agreement = _best_line_agreement(clean, image_match["name"])
+        if image_match["score"] >= 0.64 and agreement >= 0.58:
+            return {
+                "kind": "named", "weapon": weapon, "camo": image_match["name"],
+                "rawText": joined, "imageMatch": image_match["name"],
+                "imageScore": float(image_match["score"]), "imageAgreement": agreement,
+                "imageRecovered": True, "weaponAnchored": bool(anchor and weapon == anchor),
+            }
+
     if image_match and image_match["score"] >= 0.80:
-        weapon = core.fuzzy_weapon(clean) or anchor
-        joined = " | ".join(clean)
-        upper = joined.upper()
         if weapon and ("UNLOCK" in upper or "CAMO" in upper or image_match["score"] >= 0.88):
             return {"kind":"named","weapon":weapon,"camo":image_match["name"],"rawText":joined,"imageMatch":image_match["name"],"imageScore":float(image_match["score"]),"imageAgreement":1.0,"imageRecovered":True,"weaponAnchored":bool(anchor and weapon==anchor)}
     return candidate
@@ -161,7 +237,7 @@ core.read_frame_variants = _read_with_image_vote
 
 
 def _emit_candidate(candidate, confidence, zone_name):
-    payload={"type":"unlock","weapon":candidate.get("weapon") or "UNKNOWN","family":candidate.get("family") if candidate["kind"]=="family" else None,"number":candidate.get("number") if candidate["kind"]=="family" else None,"camo":candidate.get("camo") if candidate["kind"]=="named" else None,"rawText":candidate.get("rawText", ""),"confidence":round(float(confidence),3),"zone":zone_name,"timestamp":core.utc_now(),"imageMatch":candidate.get("imageMatch"),"imageScore":round(float(candidate.get("imageScore") or 0.0),3),"imageAgreement":round(float(candidate.get("imageAgreement") or 0.0),3),"imageRecovered":bool(candidate.get("imageRecovered")),"weaponAnchored":bool(candidate.get("weaponAnchored"))}
+    payload={"type":"unlock","weapon":candidate.get("weapon") or "UNKNOWN","family":candidate.get("family") if candidate["kind"]=="family" else None,"number":candidate.get("number") if candidate["kind"]=="family" else None,"camo":candidate.get("camo") if candidate["kind"]=="named" else None,"rawText":candidate.get("rawText", ""),"confidence":round(float(confidence),3),"zone":zone_name,"timestamp":core.utc_now(),"imageMatch":candidate.get("imageMatch"),"imageScore":round(float(candidate.get("imageScore") or 0.0),3),"imageAgreement":round(float(candidate.get("imageAgreement") or 0.0),3),"imageRecovered":bool(candidate.get("imageRecovered")),"textRecovered":bool(candidate.get("textRecovered")),"weaponAnchored":bool(candidate.get("weaponAnchored"))}
     core.emit(payload)
     return (payload.get("weapon"),payload.get("family"),payload.get("number"),payload.get("camo"))
 
