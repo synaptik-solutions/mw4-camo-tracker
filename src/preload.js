@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('tracker', {
   startDetector: () => ipcRenderer.invoke('start-detector'),
   stopDetector: () => ipcRenderer.invoke('stop-detector'),
   openCaptureSetup: () => ipcRenderer.invoke('open-capture-setup'),
+  saveCaptureSource: (source) => ipcRenderer.invoke('save-capture-source', source),
   saveCaptureZones: (zones) => ipcRenderer.invoke('save-capture-zones', zones),
   closeCaptureSetup: () => ipcRenderer.invoke('close-capture-setup'),
   resetCaptureZones: () => ipcRenderer.invoke('reset-capture-zones'),
