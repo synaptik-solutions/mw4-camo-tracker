@@ -57,9 +57,9 @@ def _normalize_capture_target(argv):
 
 _normalize_capture_target(sys.argv)
 
-# Replace the backend's expensive full-frame health statistic with a sampled check before
-# detector_entry creates any capture sessions.
+# Runtime policies are loaded before detector_entry creates capture/reference objects.
 import capture_perf  # noqa: E402,F401
+import reference_policy  # noqa: E402,F401
 import detector_entry as app  # noqa: E402
 
 if __name__ == "__main__":
