@@ -52,8 +52,8 @@ class _MONITORINFO(ctypes.Structure):
 def _enumerate_monitors():
     """Return MSS-compatible monitor dictionaries.
 
-    Index 0 is the virtual desktop union, followed by physical monitors. WindowsCapture's
-    monitor indexes are zero-based, so physical entry N maps to native index N-1.
+    Index 0 is the virtual desktop union, followed by physical monitors. The windows-capture
+    monitor selector is 1-based, so physical entry N maps directly to native monitor N.
     """
     user32 = ctypes.windll.user32
     monitors = []
@@ -172,7 +172,9 @@ class mss:
         if WindowsCapture is None:
             raise RuntimeError(f"windows-capture import failed: {_IMPORT_ERROR}")
 
-        native_index = max(0, monitor_entry_index - 1)
+        # windows-capture uses 1-based monitor numbering. Our physical monitor entries are
+        # also 1-based because index 0 is reserved for the virtual desktop union.
+        native_index = max(1, int(monitor_entry_index))
         self._frame_event.clear()
         with self._lock:
             self._latest_bgr = None
@@ -224,7 +226,7 @@ class mss:
     def _start_dxgi(self, monitor_entry_index):
         if DxgiDuplicationSession is None:
             raise RuntimeError(f"windows-capture import failed: {_IMPORT_ERROR}")
-        native_index = max(0, monitor_entry_index - 1)
+        native_index = max(1, int(monitor_entry_index))
         self._dxgi = DxgiDuplicationSession(native_index)
         self._active_monitor = monitor_entry_index
         self._backend = "dxgi-desktop-duplication"
