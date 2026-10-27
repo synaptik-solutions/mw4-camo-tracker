@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "description": "Read-only MW4 automatic camo tracker for Windows",
-  "main": "src/main.js",
+  "main": "src/bootstrap.js",
   "scripts": {
     "build:renderer": "esbuild src/renderer.jsx --bundle --platform=browser --outfile=src/renderer.bundle.js --define:process.env.NODE_ENV=\"'production'\"",
     "start": "npm run build:renderer && electron .",
