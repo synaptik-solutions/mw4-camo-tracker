@@ -376,7 +376,9 @@ def main():
                 popup_match = popup_score >= 0.58
 
                 if visual_change or activity_spike or popup_match:
-                    if now > zone["burst_until"]:
+                    # Gameplay motion keeps extending burst_until; rearm exhausted bursts
+                    # so a later unlock cannot fall into the five-second heartbeat gap.
+                    if now > zone["burst_until"] or zone["burst_attempts"] >= (12 if popup_match else 9):
                         zone["burst_lines"] = []
                         zone["burst_votes"] = Counter()
                         zone["burst_candidates"] = {}
