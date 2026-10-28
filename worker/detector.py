@@ -40,7 +40,7 @@ def normalize_ocr_line(text):
     for pattern, value in [
         (r"\bCAM[0O]\b", "CAMO"),
         (r"\bUNL[0O]CKE[D0]?\b", "UNLOCKED"),
-        (r"\bMIL1TARY\b", "MILITARY"),
+        (r"\bMIL[1ILT][1ILT]ARY\b", "MILITARY"),
         (r"\bMILITAR[VY]\b", "MILITARY"),
         (r"\bSPEC1AL\b", "SPECIAL"),
         (r"\bC[0O]MPLETI[0O]NIST\b", "COMPLETIONIST"),
@@ -82,7 +82,8 @@ def parse_candidate(lines):
     weapon = fuzzy_weapon(clean) or "UNKNOWN"
 
     # Do not require the small UNLOCKED header; OCR often misses it.
-    match = UNLOCK_RE.search(compact)
+    match = next((m for m in UNLOCK_RE.finditer(compact)
+                  if m.group(1).upper() != "MILITARY" or 1 <= int(m.group(2)) <= 8), None)
     if match:
         return {
             "kind": "family",
@@ -91,6 +92,10 @@ def parse_candidate(lines):
             "number": int(match.group(2)),
             "rawText": joined,
         }
+
+    # A numbered family title missing its digit is incomplete, not a named camo.
+    if re.search(r"\b(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE)\s+CAMO\b", compact):
+        return None
 
     for line in [x.upper() for x in clean]:
         match = CAMO_RE.search(line)
@@ -190,12 +195,34 @@ def popup_layout_score(bgr):
     return float(min(best, 1.0))
 
 
-def ocr_lines(ocr, image, min_conf=0.15):
+def ocr_lines(ocr, image, min_conf=0.15, focus_popup=False):
     result, _ = ocr(image)
     if not result:
         return [], 0.0
     good = [item for item in result if len(item) >= 3 and float(item[2]) >= min_conf]
-    return [item[1] for item in good], float(np.mean([item[2] for item in good])) if good else 0.0
+    lines = [item[1] for item in good]
+    confidence = float(np.mean([item[2] for item in good])) if good else 0.0
+    if focus_popup:
+        # Full-zone text detection can drop the small camo digit. Use the OCR header
+        # bounds to enlarge only its card, preserving positions across resolutions.
+        for item in good:
+            if compact_text(item[1]) != "UNLOCKED":
+                continue
+            points = np.asarray(item[0])
+            x0, y0 = points.min(axis=0)
+            x1, y1 = points.max(axis=0)
+            bw, bh = max(1, x1-x0), max(1, y1-y0)
+            h, w = image.shape[:2]
+            card = image[max(0, int(y0-bh)):min(h, int(y1+3.5*bh)),
+                         max(0, int(x0-2.8*bw)):min(w, int(x1+.2*bw))]
+            if card.size:
+                scale = min(4.0, max(1.0, 51.0 / bh))
+                enlarged = cv2.resize(card, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                more, more_conf = ocr_lines(ocr, enlarged, min_conf)
+                lines = merge_lines(more, lines)
+                confidence = max(confidence, more_conf)
+            break
+    return lines, confidence
 
 
 def merge_lines(existing, incoming):
@@ -211,9 +238,13 @@ def merge_lines(existing, incoming):
 
 def read_frame_variants(ocr, bgr, aggressive=False):
     merged, best_conf = [], 0.0
-    lines, conf = ocr_lines(ocr, bgr, 0.13 if aggressive else 0.18)
+    lines, conf = ocr_lines(ocr, bgr, 0.13 if aggressive else 0.18, focus_popup=True)
     merged = merge_lines(merged, lines)
     best_conf = max(best_conf, conf)
+
+    candidate = parse_candidate(merged)
+    if candidate and candidate.get("kind") == "family" and candidate.get("weapon") != "UNKNOWN" and best_conf >= 0.45:
+        return merged, best_conf
 
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=2.8 if aggressive else 2.0, tileGridSize=(8, 8)).apply(gray)
@@ -376,7 +407,9 @@ def main():
                 popup_match = popup_score >= 0.58
 
                 if visual_change or activity_spike or popup_match:
-                    if now > zone["burst_until"]:
+                    # Gameplay motion keeps extending burst_until; rearm exhausted bursts
+                    # so a later unlock cannot fall into the five-second heartbeat gap.
+                    if now > zone["burst_until"] or zone["burst_attempts"] >= (12 if popup_match else 9):
                         zone["burst_lines"] = []
                         zone["burst_votes"] = Counter()
                         zone["burst_candidates"] = {}
@@ -447,3 +480,4 @@ if __name__ == "__main__":
     except Exception as exc:
         emit({"type": "error", "message": str(exc)})
         sys.exit(1)
+
