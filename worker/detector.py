@@ -4,7 +4,6 @@ import json
 import re
 import sys
 import time
-from collections import Counter
 from datetime import datetime, timezone
 
 import cv2
@@ -12,7 +11,8 @@ import mss
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 
-from popup_signature import find_popup_header
+from popup_signature import find_popup_header, popup_card_bounds
+from capture_pipeline import CapturePump
 
 UNLOCK_RE = re.compile(r"\b(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE)\s+CAMO\s*#?\s*(\d+)\b", re.I)
 CAMO_RE = re.compile(r"\b([A-Z][A-Z0-9' .\-]{2,30})\s+CAMO\b", re.I)
@@ -73,10 +73,15 @@ def fuzzy_weapon(lines):
     return best_name if best_score >= 0.58 else None
 
 
+def non_camo_banner(lines):
+    joined = " | ".join(normalize_ocr_line(x) for x in lines if x).upper()
+    return bool(re.search(r"\b(WEAPON\s*LEVEL|LEVEL\s*UP|RANK\s*UP|BATTLE\s*PASS|ATTACHMENT|XP\s*TOKEN|NEW\s*UNLOCK|KILL\s*STREAK|BEST\s*PLAY)\b", joined))
+
+
 def parse_candidate(lines):
     clean = [normalize_ocr_line(x) for x in lines if x and str(x).strip()]
     clean = [x for x in clean if x]
-    if not clean:
+    if not clean or non_camo_banner(clean):
         return None
     joined = " | ".join(clean)
     compact = re.sub(r"[^A-Z0-9]+", " ", joined.upper())
@@ -197,11 +202,15 @@ def popup_layout_score(bgr):
     return float(min(best, 1.0))
 
 
-def ocr_lines(ocr, image, min_conf=0.15, focus_popup=False):
+def ocr_lines(ocr, image, min_conf=0.15, focus_popup=False, bounds=None):
     result, _ = ocr(image)
     if not result:
         return [], 0.0
     good = [item for item in result if len(item) >= 3 and float(item[2]) >= min_conf]
+    if bounds is not None:
+        x0, y0, x1, y1 = bounds
+        good = [item for item in good if x0 <= np.mean(np.asarray(item[0])[:, 0]) <= x1
+                and y0 <= np.mean(np.asarray(item[0])[:, 1]) <= y1]
     lines = [item[1] for item in good]
     confidence = float(np.mean([item[2] for item in good])) if good else 0.0
     if focus_popup:
@@ -238,27 +247,51 @@ def merge_lines(existing, incoming):
     return merged[-50:]
 
 
+def complete_candidate(lines, confidence):
+    candidate = parse_candidate(lines)
+    return bool(candidate and candidate.get("weapon") not in (None, "UNKNOWN") and confidence >= .45)
+
+
 def read_frame_variants(ocr, bgr, aggressive=False):
-    merged, best_conf = [], 0.0
-    lines, conf = ocr_lines(ocr, bgr, 0.13 if aggressive else 0.18, focus_popup=True)
-    merged = merge_lines(merged, lines)
-    best_conf = max(best_conf, conf)
+    header = find_popup_header(bgr)
+    if not header:
+        return [], 0.
+    bounds = popup_card_bounds(bgr.shape, header[1])
+    x0, y0, x1, y1 = bounds
+    card = bgr[y0:y1, x0:x1]
+    scale = min(3., max(1., 48. / max(1, header[1][3])))
+    enlarged = cv2.resize(card, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    lines, confidence = ocr_lines(ocr, enlarged, .15)
+    if non_camo_banner(lines) or complete_candidate(lines, confidence):
+        return lines, confidence
 
-    candidate = parse_candidate(merged)
-    if candidate and candidate.get("kind") == "family" and candidate.get("weapon") != "UNKNOWN" and best_conf >= 0.45:
-        return merged, best_conf
+    gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY)
+    contrast = cv2.createCLAHE(clipLimit=2., tileGridSize=(8, 8)).apply(gray)
+    more, more_conf = ocr_lines(ocr, contrast, .15)
+    lines = merge_lines(lines, more)
+    confidence = max(confidence, more_conf)
+    if non_camo_banner(lines) or complete_candidate(lines, confidence):
+        return lines, confidence
 
+    # Detection at the original zone scale sometimes reads the short gun name better.
+    # Only accept boxes inside this card, never text from another banner or the HUD.
+    more, more_conf = ocr_lines(ocr, bgr, .15, bounds=bounds)
+    return merge_lines(lines, more), max(confidence, more_conf)
+
+
+def inspect_capture_frame(frame, zone_name):
+    bgr = np.asarray(frame, dtype=np.uint8)[:, :, :3]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.8 if aggressive else 2.0, tileGridSize=(8, 8)).apply(gray)
-    variants = [
-        cv2.resize(clahe, None, fx=1.55 if aggressive else 1.30, fy=1.55 if aggressive else 1.30, interpolation=cv2.INTER_CUBIC),
-        cv2.resize(cv2.adaptiveThreshold(clahe, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 7), None, fx=1.45, fy=1.45, interpolation=cv2.INTER_CUBIC),
-    ]
-    for image in variants:
-        more, more_conf = ocr_lines(ocr, image, 0.12 if aggressive else 0.16)
-        merged = merge_lines(merged, more)
-        best_conf = max(best_conf, more_conf)
-    return merged, best_conf
+    sample = cv2.resize(gray, (96, 54), interpolation=cv2.INTER_AREA)
+    header = None if "weapon" in zone_name else find_popup_header(bgr)
+    return header, {"mean": round(float(np.mean(sample)), 2),
+                    "stddev": round(float(np.std(sample)), 2),
+                    "activity": round(text_activity(gray), 5),
+                    "popupScore": round(float(header[0]), 3) if header else 0.}
+
+
+def prepare_frame(bgr, zone_name, header_score, backend):
+    """Entrypoint may attach recognition context here; never run it in capture."""
 
 
 def sanitize_zones(raw):
@@ -309,7 +342,7 @@ def emit_candidate(candidate, confidence, zone_name):
         "rawText": candidate.get("rawText", ""),
         "confidence": round(confidence, 3),
         "zone": zone_name,
-        "timestamp": utc_now(),
+        "timestamp": candidate.get("capturedAt") or utc_now(),
     }
     emit(payload)
     return (payload.get("weapon"), payload.get("family"), payload.get("number"), payload.get("camo"))
@@ -329,22 +362,21 @@ def main():
     # UI supports 2/4/6 checks per second. 4 remains the recommended default; 6 is an
     # opt-in faster scan mode and stays below the native capture backend's ~10 Hz request.
     fps = min(max(args.fps, 1.0), 6.0)
-    interval = 1.0 / fps
     try:
         cv2.setNumThreads(1)
     except Exception:
         pass
 
-    ocr = RapidOCR(det_use_dilation=True)
-    last_event_key = None
-    last_event_time = 0.0
+    ocr = RapidOCR(det_use_dilation=True, use_cls=False,
+                   intra_op_num_threads=1, inter_op_num_threads=1)
+    recent_events = {}
     last_health = 0.0
     try:
         zone_specs = sanitize_zones(json.loads(args.zones)) if args.zones else DEFAULT_ZONES
     except Exception:
         zone_specs = DEFAULT_ZONES
 
-    with mss.mss() as sct:
+    with CapturePump(mss.mss, inspect_capture_frame, utc_now, fps) as sct:
         if 1 <= args.monitor < len(sct.monitors):
             monitor = dict(sct.monitors[args.monitor])
             monitor_source = f"mss-{args.monitor}"
@@ -365,116 +397,66 @@ def main():
                 "name": spec["name"],
                 "percent": {k: spec[k] for k in ("x", "y", "width", "height")},
                 "region": scaled_region(monitor, reference_width, reference_height, scale_x, scale_y, spec),
-                "last_fp": None,
-                "baseline_activity": None,
-                "last_ocr": 0.0,
-                "last_debug": 0.0,
-                "last_mean": 0.0,
-                "last_stddev": 0.0,
-                "last_activity": 0.0,
                 "last_ocr_text": "",
-                "last_ocr_confidence": 0.0,
-                "last_popup_score": 0.0,
-                "burst_until": 0.0,
-                "next_burst_ocr": 0.0,
-                "burst_attempts": 0,
-                "burst_lines": [],
-                "burst_votes": Counter(),
-                "burst_candidates": {},
+                "last_ocr_confidence": 0.,
+                "ocr_duration_ms": 0.,
+                "capture_age_ms": 0.,
             })
 
-        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": False, "popupHeaderTrigger": True})
+        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": False, "popupHeaderTrigger": True, "asyncCapture": True, "maxPendingFrames": sct.queue.capacity})
 
+        sct.configure(zones)
+        by_name = {zone["name"]: zone for zone in zones}
         while True:
-            started = time.perf_counter()
+            sct.check_error()
+            item = sct.queue.get(timeout=.25)
             now = time.monotonic()
-            for zone in zones:
-                frame = np.asarray(sct.grab(zone["region"]), dtype=np.uint8)
-                bgr = frame[:, :, :3]
-                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                fp = fingerprint(gray)
-                activity = text_activity(gray)
-                popup_header = find_popup_header(bgr)
-                popup_score = float(popup_header[0]) if popup_header else 0.0
-                zone["last_popup_score"] = popup_score
-                zone["last_mean"] = float(np.mean(gray))
-                zone["last_stddev"] = float(np.std(gray))
-                zone["last_activity"] = activity
-                zone["baseline_activity"] = activity if zone["baseline_activity"] is None else zone["baseline_activity"] * 0.99 + activity * 0.01
-                mean_delta = 999.0 if zone["last_fp"] is None else float(np.mean(np.abs(fp - zone["last_fp"])))
-                zone["last_fp"] = fp
-
-                activity_spike = activity > (zone["baseline_activity"] + 0.0010)
-                visual_change = mean_delta >= 1.0
-                strong_change = mean_delta >= 2.0
-                popup_match = popup_header is not None
-
-                # Motion and bright HUD text alone must never schedule expensive OCR.
-                if popup_match:
-                    # Gameplay motion keeps extending burst_until; rearm exhausted bursts
-                    # so a later unlock cannot fall into the five-second heartbeat gap.
-                    if now > zone["burst_until"] or zone["burst_attempts"] >= (12 if popup_match else 9):
-                        zone["burst_lines"] = []
-                        zone["burst_votes"] = Counter()
-                        zone["burst_candidates"] = {}
-                        zone["burst_attempts"] = 0
-                    zone["burst_until"] = max(zone["burst_until"], now + (3.0 if popup_match else 2.2))
-                    zone["next_burst_ocr"] = min(zone["next_burst_ocr"] or now, now)
-
-                in_burst = popup_match and now <= zone["burst_until"] and zone["burst_attempts"] < 12
-                burst_due = in_burst and now >= zone["next_burst_ocr"]
-                heartbeat_due = popup_match and (now - zone["last_ocr"]) >= 5.0
-                if not (burst_due or heartbeat_due):
-                    continue
-
-                zone["last_ocr"] = now
-                if burst_due:
-                    zone["burst_attempts"] += 1
-                    zone["next_burst_ocr"] = now + (0.16 if popup_match else 0.20)
-
-                lines, confidence = read_frame_variants(ocr, bgr, aggressive=(strong_change or burst_due or popup_match))
-                zone["burst_lines"] = merge_lines(zone["burst_lines"], lines)
-                candidate = parse_candidate(zone["burst_lines"] if in_burst else lines)
-                if candidate:
-                    ckey = candidate_key(candidate)
-                    zone["burst_votes"][ckey] += 1
-                    zone["burst_candidates"][ckey] = candidate
-
-                debug_text = " | ".join(zone["burst_lines"] if in_burst else lines)
-                zone["last_ocr_text"] = debug_text
+            if item is not None and now - item.captured_at <= 15.:
+                zone = by_name[item.zone]
+                bgr = np.asarray(item.frame, dtype=np.uint8)[:, :, :3]
+                prepare_frame(bgr, item.zone, item.header[0], item.backend)
+                ocr_started = time.monotonic()
+                lines, confidence = read_frame_variants(ocr, bgr, aggressive=True)
+                # Every candidate comes from one captured card; do not combine separate
+                # banners' weapon names, camo numbers or text across time.
+                candidate = parse_candidate(lines)
+                finished = time.monotonic()
+                zone["last_ocr_text"] = " | ".join(lines)
                 zone["last_ocr_confidence"] = confidence
-                if now - zone["last_debug"] >= 1.2:
-                    emit({"type": "ocr-debug", "zone": zone["name"], "rawText": debug_text, "confidence": round(confidence, 3), "delta": round(mean_delta, 3), "activity": round(activity, 5), "popupScore": round(popup_score, 3), "popupMatch": bool(popup_match), "burst": bool(in_burst), "burstAttempt": zone["burst_attempts"], "timestamp": utc_now()})
-                    zone["last_debug"] = now
+                zone["ocr_duration_ms"] = round((finished - ocr_started) * 1000)
+                zone["capture_age_ms"] = round((finished - item.captured_at) * 1000)
+                emit({"type": "ocr-debug", "zone": item.zone,
+                      "rawText": zone["last_ocr_text"], "confidence": round(confidence, 3),
+                      "popupScore": round(item.header[0], 3), "popupMatch": True,
+                      "ocrDurationMs": zone["ocr_duration_ms"],
+                      "captureAgeMs": zone["capture_age_ms"], "timestamp": item.captured_utc})
+                if candidate and confidence >= .45:
+                    candidate["capturedAt"] = item.captured_utc
+                    event_key = (candidate.get("weapon"), candidate.get("family"),
+                                 candidate.get("number"), candidate.get("camo"))
+                    recent_events = {key: at for key, at in recent_events.items() if finished - at < 60.}
+                    if event_key not in recent_events:
+                        saved = emit_candidate(candidate, confidence, item.zone)
+                        if saved:
+                            recent_events[event_key] = finished
 
-                winner = None
-                if zone["burst_votes"]:
-                    vote_key, votes = zone["burst_votes"].most_common(1)[0]
-                    candidate_obj = zone["burst_candidates"].get(vote_key)
-                    strong_single = candidate_obj and candidate_obj.get("kind") == "family" and confidence >= 0.45
-                    popup_single = (popup_match and candidate_obj and candidate_obj.get("weapon") not in (None, "UNKNOWN")
-                                    and confidence >= 0.45)
-                    if votes >= 2 or strong_single or popup_single:
-                        winner = candidate_obj
-
-                if winner:
-                    event_key = (winner.get("weapon"), winner.get("family"), winner.get("number"), winner.get("camo"))
-                    if event_key != last_event_key or now - last_event_time > 8.0:
-                        last_event_key = emit_candidate(winner, confidence, zone["name"])
-                        last_event_time = now
-                    zone["burst_until"] = 0.0
-                    zone["burst_attempts"] = 0
-                    zone["burst_lines"] = []
-                    zone["burst_votes"] = Counter()
-                    zone["burst_candidates"] = {}
-
-            if now - last_health >= 5.0:
-                emit({"type": "capture-health", "monitor": args.monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "zones": [{"name": z["name"], "region": z["region"], "mean": round(z["last_mean"], 2), "stddev": round(z["last_stddev"], 2), "activity": round(z["last_activity"], 5), "popupScore": round(z["last_popup_score"], 3), "ocrText": z["last_ocr_text"], "ocrConfidence": round(z["last_ocr_confidence"], 3), "burstActive": time.monotonic() <= z["burst_until"]} for z in zones], "timestamp": utc_now()})
+            now = time.monotonic()
+            if now - last_health >= 2.:
+                latest, count, backend = sct.snapshot()
+                health = []
+                for zone in zones:
+                    stats = latest.get(zone["name"], {})
+                    health.append({"name": zone["name"], "region": zone["region"], **stats,
+                                   "ocrText": zone["last_ocr_text"],
+                                   "ocrConfidence": round(zone["last_ocr_confidence"], 3),
+                                   "ocrDurationMs": zone["ocr_duration_ms"],
+                                   "captureAgeMs": zone["capture_age_ms"]})
+                emit({"type": "capture-health", "monitor": args.monitor,
+                      "settingsResolution": {"width": reference_width, "height": reference_height},
+                      "zones": health, "capturedFrames": count, "pendingFrames": len(sct.queue),
+                      "droppedFrames": sct.queue.dropped, "captureBackend": backend,
+                      "timestamp": utc_now()})
                 last_health = now
-
-            elapsed = time.perf_counter() - started
-            if elapsed < interval:
-                time.sleep(interval - elapsed)
 
 
 if __name__ == "__main__":
@@ -485,4 +467,5 @@ if __name__ == "__main__":
     except Exception as exc:
         emit({"type": "error", "message": str(exc)})
         sys.exit(1)
+
 

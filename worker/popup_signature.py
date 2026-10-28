@@ -53,3 +53,12 @@ def find_popup_header(bgr):
             best_score = float(score)
             best_bounds = tuple(int(round(v / scale)) for v in (x, y, tw, th))
     return (best_score, best_bounds) if best_bounds else None
+
+
+
+def popup_card_bounds(shape, header_bounds):
+    """Text-only card extent relative to the matched UNLOCKED lettering."""
+    height, width = shape[:2]
+    x, y, w, h = header_bounds
+    return (max(0, int(x - 1.65*w)), max(0, int(y - .5*h)),
+            min(width, int(x + 1.25*w)), min(height, int(y + 4.5*h)))

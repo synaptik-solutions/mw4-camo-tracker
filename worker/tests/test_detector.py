@@ -1,7 +1,4 @@
 """Recognition regressions reproduced from an unlock recording; no game capture needed."""
-import ast
-from collections import Counter
-import inspect
 from pathlib import Path
 import sys
 import unittest
@@ -33,31 +30,53 @@ class RecognitionTests(unittest.TestCase):
     def test_other_named_camos_still_parse(self):
         self.assertEqual(detector.parse_candidate(['GOLD CAMO', '.50GS'])['camo'], 'GOLD')
 
-    def test_motion_rearms_exhausted_bursts(self):
-        # Execute the production trigger block with deterministic time. Under the old
-        # trigger, scans stop after the quota and a later three-second popup is missed.
-        tree = ast.parse(inspect.getsource(detector.main))
-        trigger = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
-                       and ast.unparse(n.test) == 'popup_match')
-        code = compile(ast.Module(body=[trigger], type_ignores=[]), '<trigger>', 'exec')
-        zone = dict(burst_until=0., burst_attempts=0, next_burst_ocr=0., last_ocr=-5.)
-        reads = []
-        for tick in range(240):
-            now = tick / 4
-            popup = now < 6 or 14 <= now <= 17
-            exec(code, dict(zone=zone, now=now, visual_change=True,
-                            activity_spike=False, popup_match=popup, Counter=Counter))
-            due = (popup and now <= zone['burst_until'] and zone['burst_attempts'] < (12 if popup else 9)
-                   and now >= zone['next_burst_ocr'])
-            if due or (popup and now-zone['last_ocr'] >= 5):
-                reads.append(now)
-                zone['last_ocr'] = now
-                if due:
-                    zone['burst_attempts'] += 1
-                    zone['next_burst_ocr'] = now + (.16 if popup else .20)
-        self.assertTrue(any(14 <= now <= 17 for now in reads))
-        self.assertFalse(any(6 <= now < 14 or now > 17 for now in reads))
+    def test_clear_popup_uses_one_small_ocr_pass(self):
+        import numpy as np
+        from unittest.mock import Mock, patch
+        box = [[0,0],[50,0],[50,20],[0,20]]
+        ocr = Mock(return_value=([[box, text, .95] for text in ['UNLOCKED','M4','MILITARY CAMO 1']], None))
+        frame = np.zeros((288,512,3), np.uint8)
+        with patch.object(detector,'find_popup_header',return_value=(.95,(430,122,72,16))):
+            lines, confidence = detector.read_frame_variants(ocr,frame)
+        self.assertEqual(ocr.call_count,1)
+        image = ocr.call_args.args[0]
+        self.assertLess(image.shape[0]*image.shape[1], frame.shape[0]*frame.shape[1])
+        self.assertEqual(detector.parse_candidate(lines)['number'],1)
+
+    def test_other_banner_stops_after_first_read_and_is_rejected(self):
+        import numpy as np
+        from unittest.mock import Mock, patch
+        box = [[0,0],[50,0],[50,20],[0,20]]
+        ocr = Mock(return_value=([[box,text,.95] for text in ['UNLOCKED','M4','WEAPONLEVEL 15','GOLD CAMO']],None))
+        with patch.object(detector,'find_popup_header',return_value=(.95,(430,122,72,16))):
+            lines, _ = detector.read_frame_variants(ocr,np.zeros((288,512,3),np.uint8))
+        self.assertEqual(ocr.call_count,1)
+        self.assertIsNone(detector.parse_candidate(lines))
+
+    def test_no_header_does_not_run_ocr(self):
+        import numpy as np
+        from unittest.mock import Mock, patch
+        ocr = Mock()
+        with patch.object(detector,'find_popup_header',return_value=None):
+            self.assertEqual(detector.read_frame_variants(ocr,np.zeros((40,60,3),np.uint8)),([],0.))
+        ocr.assert_not_called()
+
+    def test_full_zone_fallback_excludes_other_banner_text(self):
+        import numpy as np
+        from unittest.mock import Mock, patch
+        box = [[0,0],[30,0],[30,10],[0,10]]
+        inside = [[330,140],[370,140],[370,155],[330,155]]
+        title = [[box,'MILITARY CAMO 1',.95]]
+        ocr = Mock(side_effect=[(title,None),(title,None),
+                   ([[inside,'M4',.95],[box,'MAR-9',.99],[box,'WEAPON LEVEL 55',.99]],None)])
+        with patch.object(detector,'find_popup_header',return_value=(.95,(430,122,72,16))):
+            lines, _ = detector.read_frame_variants(ocr,np.zeros((288,512,3),np.uint8))
+        self.assertEqual(ocr.call_count,3)
+        self.assertNotIn('MAR-9',lines)
+        self.assertNotIn('WEAPON LEVEL 55',lines)
+        self.assertEqual(detector.parse_candidate(lines)['weapon'],'M4')
 
 
 if __name__ == '__main__':
     unittest.main()
+
