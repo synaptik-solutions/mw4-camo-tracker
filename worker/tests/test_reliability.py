@@ -151,6 +151,15 @@ class ReplayTests(unittest.TestCase):
         self.assertIsNone(score_events(events,None)['missed'])
         with self.assertRaises(ValueError):score_events([], [dict(weapon='M4',camo='Gold',start=8,end=1)])
 
+    def test_numbered_special_and_completionist_events_match_catalog_names(self):
+        result=score_events([dict(weapon='M4',family='SPECIAL CAMO',number=1,sourceTime=5.),
+                             dict(weapon='M4',family='COMPLETIONIST CAMO',number=1,sourceTime=7.)],
+                            [dict(weapon='M4',camo='Myriad',start=4,end=6),
+                             dict(weapon='M4',camo='Gold',start=6,end=8)])
+        self.assertEqual(result['matched'],2)
+        self.assertFalse(result['missed'])
+        self.assertFalse(result['falseDetections'])
+
     def test_telemetry_is_disabled_before_ocr_sessions_are_created(self):
         from ocr_runtime import create_ocr
         calls=[]
