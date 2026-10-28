@@ -19,6 +19,34 @@ function fmtTime(ts) {
 function key(value) { return String(value || '').trim().toUpperCase(); }
 function pct(v) { return `${Math.round(Number(v || 0) * 1000) / 10}%`; }
 
+function PendingDetection({event}) {
+  const [weapon,setWeapon]=React.useState(catalogWeapons.find(w=>key(w.name)===key(event.weapon))?.name || '');
+  const selected=catalogWeapons.find(w=>w.name===weapon);
+  const choices=selected?allCamosForWeapon(selected):[];
+  const detected=event.camo || `${event.family || ''} ${event.number || ''}`.trim();
+  const suggested=choices.find(c=>key(c.name)===key(detected))?.name || '';
+  const [choice,setChoice]=React.useState('');
+  const camo=choice || suggested;
+  const [error,setError]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  async function assign() {
+    setBusy(true);setError('');
+    try {const result=await window.tracker.assignPending(event.id,weapon,camo);if(!result.ok)setError(result.message);}
+    catch(e){setError(e.message || 'Assignment failed. Try again.');}
+    finally{setBusy(false);}
+  }
+  return <div className="pendingDetection">
+    <div><b>{detected || 'Camo name unreadable'}</b><span className="muted">{fmtTime(event.timestamp)} · Weapon read: {event.weapon || 'UNKNOWN'}</span></div>
+    {event.rawText && <p className="raw">Read from popup: {event.rawText}</p>}
+    <div className="assignmentControls">
+      <label>Weapon<select value={weapon} disabled={busy} onChange={e=>{setWeapon(e.target.value);setChoice('');}}><option value="">Choose weapon…</option>{catalogWeapons.map(w=><option key={w.name} value={w.name}>{w.name}</option>)}</select></label>
+      <label>Camo<select value={camo} disabled={!selected || busy} onChange={e=>setChoice(e.target.value)}><option value="">Choose camo…</option>{choices.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}</select></label>
+      <button className="primary" disabled={!weapon || !camo || busy} onClick={assign}>{busy?'Saving…':'Assign'}</button>
+      <button className="ghost" disabled={busy} onClick={async()=>{try{await window.tracker.dismissPending(event.id);}catch(e){setError(e.message);}}}>Dismiss</button>
+    </div>{error && <p className="error">{error}</p>}
+  </div>;
+}
+
 function App() {
   const [state, setState] = React.useState({ settings:{ monitorIndex:1, scanFps:4, overlay:true, autoStart:true, captureZones:[] }, progress:{ weapons:{}, events:[] }, monitors:[], appVersion:'', update:{ status:'idle', percent:0, message:'' } });
   const [running, setRunning] = React.useState(false);
@@ -111,6 +139,7 @@ function App() {
       <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{selectedMonitor?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small><small>v{state.appVersion || '—'}</small></div>
     </aside>
     <main>
+      {Boolean(progress.pending?.length) && <section className="card assignmentQueue" aria-live="polite"><span className="eyebrow">NEEDS YOUR REVIEW</span><h3>Assign detected camos ({progress.pending.length})</h3><p className="muted">These popups could not be matched automatically. Choose the weapon and camo to save each unlock.</p>{progress.pending.map(event=><PendingDetection key={event.id} event={event}/>)}</section>}
       {tab==='dashboard' && <>
         <header><div><span className="eyebrow">LIVE TRACKING</span><h2>Dashboard</h2><p>Read-only screen capture. No game memory reading and no gameplay automation.</p></div><div className="buttons"><button className="ghost" onClick={()=>window.tracker.stopDetector()}>Stop</button><button className="primary" onClick={startWatching}>Start watching</button></div></header>
         {error && <div className="error">{error}</div>}

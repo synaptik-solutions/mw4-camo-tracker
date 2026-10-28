@@ -61,6 +61,7 @@ jobs:
         run: |
           python -m unittest discover -s worker/tests -v
           node tests/unlockPolicy.test.js
+          node tests/manualAssignment.test.js
 
       - name: Build detector exe
         run: |

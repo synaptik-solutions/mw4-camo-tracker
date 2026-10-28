@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, screen, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 const { spawn, execFile } = require('child_process');
 const Store = require('electron-store');
 const { autoUpdater } = require('electron-updater');
@@ -138,7 +139,36 @@ async function openCaptureSetup(){
 function normalizeEvent(e){return{type:e.type||'unlock',weapon:canonicalWeaponName(e.weapon),family:e.family?key(e.family):null,number:Number.isInteger(e.number)?e.number:null,camo:e.camo?key(e.camo):null,rawText:e.rawText||'',confidence:typeof e.confidence==='number'?e.confidence:null,timestamp:e.timestamp||new Date().toISOString()};}
 function getWeaponProgress(p,w){const k=canonicalWeaponName(w),c=p.weapons[k]||{unlocks:[],lastSeen:null};c.unlocks=Array.isArray(c.unlocks)?c.unlocks.map(key):[];return{key:k,current:c};}
 function broadcastProgress(p){store.set('progress',p);mainWindow?.webContents.send('progress-updated',p);}
-function saveUnlock(raw){const e=normalizeEvent(raw);if(!e.weapon||e.weapon==='UNKNOWN'){mainWindow?.webContents.send('detector-error','Camo popup detected, but its weapon could not be read.');return false;}if(!isSupportedUnlock(e))return false;const p=store.get('progress'),{key:k,current:w}=getWeaponProgress(p,e.weapon);if(e.family&&Number.isInteger(e.number)&&e.number>0){const f=e.family.includes('MILITARY')?'MILITARY CAMO':e.family;if(f==='MILITARY CAMO'){for(let n=1;n<=e.number;n++){const t=`MILITARY CAMO ${n}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else{const t=`${f} ${e.number}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else if(e.camo&&!w.unlocks.includes(e.camo))w.unlocks.push(e.camo);w.lastSeen=e.timestamp;p.weapons[k]=w;p.events.unshift({...e,weapon:k});p.events=p.events.slice(0,300);broadcastProgress(p);mainWindow?.webContents.send('detector-event',{...e,weapon:k});if(overlayWindow&&getSettings().overlay){const s=getSettings(),m=getMonitors(),d=m[s.monitorIndex]||m[0];positionOverlay(d);overlayWindow.webContents.send('overlay-event',{...e,weapon:k});overlayWindow.showInactive();clearTimeout(lastOverlayTimer);lastOverlayTimer=setTimeout(()=>{if(overlayWindow&&!overlayWindow.isDestroyed())overlayWindow.hide();},4500);}return true;}
+function queueUnassigned(e) {
+  const p=store.get('progress');
+  p.pending=Array.isArray(p.pending)?p.pending:[];
+  // Repeated OCR samples from one popup should produce one review card.
+  const duplicate=p.pending.find(x=>x.weapon===e.weapon&&x.family===e.family&&x.number===e.number&&x.camo===e.camo&&Math.abs(Date.parse(x.timestamp)-Date.parse(e.timestamp))<15000);
+  if(duplicate)return false;
+  p.pending.unshift({...e,id:randomUUID()});
+  broadcastProgress(p);
+  mainWindow?.webContents.send('detector-event',{...e,needsAssignment:true});
+  return false;
+}
+function assignPending(id,weapon,camo) {
+  const p=store.get('progress'),entry=(p.pending||[]).find(x=>x.id===id);
+  if(!entry)return {ok:false,message:'This detection is no longer waiting for assignment.'};
+  const event={...entry,weapon:canonicalWeaponName(weapon),family:null,number:null,camo:key(camo)};
+  const military=event.camo.match(/^MILITARY CAMO (\d+)$/);
+  if(military){event.family='MILITARY CAMO';event.number=Number(military[1]);event.camo=null;}
+  if(!isSupportedUnlock(event))return {ok:false,message:'Choose a weapon and a valid camo.'};
+  // Use the normal save path so Military backfill and history stay consistent.
+  if(!saveUnlock(event))return {ok:false,message:'Could not save this assignment.'};
+  const updated=store.get('progress');
+  updated.pending=(updated.pending||[]).filter(x=>x.id!==id);
+  broadcastProgress(updated);
+  return {ok:true};
+}
+function dismissPending(id) {
+  const p=store.get('progress');p.pending=(p.pending||[]).filter(x=>x.id!==id);
+  broadcastProgress(p);return {ok:true};
+}
+function saveUnlock(raw){const e=normalizeEvent(raw);if(!isSupportedUnlock(e))return queueUnassigned(e);const p=store.get('progress'),{key:k,current:w}=getWeaponProgress(p,e.weapon);if(e.family&&Number.isInteger(e.number)&&e.number>0){const f=e.family.includes('MILITARY')?'MILITARY CAMO':e.family;if(f==='MILITARY CAMO'){for(let n=1;n<=e.number;n++){const t=`MILITARY CAMO ${n}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else{const t=`${f} ${e.number}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else if(e.camo&&!w.unlocks.includes(e.camo))w.unlocks.push(e.camo);w.lastSeen=e.timestamp;p.weapons[k]=w;p.events.unshift({...e,weapon:k});p.events=p.events.slice(0,300);broadcastProgress(p);mainWindow?.webContents.send('detector-event',{...e,weapon:k});if(overlayWindow&&getSettings().overlay){const s=getSettings(),m=getMonitors(),d=m[s.monitorIndex]||m[0];positionOverlay(d);overlayWindow.webContents.send('overlay-event',{...e,weapon:k});overlayWindow.showInactive();clearTimeout(lastOverlayTimer);lastOverlayTimer=setTimeout(()=>{if(overlayWindow&&!overlayWindow.isDestroyed())overlayWindow.hide();},4500);}return true;}
 function setCamoStatus(weaponName,camoName,complete){const p=store.get('progress'),{key:k,current:c}=getWeaponProgress(p,weaponName),t=key(camoName);if(!t)return{ok:false};if(complete){const m=t.match(/^MILITARY CAMO (\d+)$/);if(m){const target=Math.max(1,Math.min(8,Number(m[1])));for(let n=1;n<=target;n++){const x=`MILITARY CAMO ${n}`;if(!c.unlocks.includes(x))c.unlocks.push(x);}}else if(!c.unlocks.includes(t))c.unlocks.push(t);}else{c.unlocks=c.unlocks.filter(x=>x!==t);const n=t.match(/^(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE) CAMO (\d+)$/);p.events=(p.events||[]).filter(e=>canonicalWeaponName(e.weapon)!==k||!(key(e.camo)===t||(n&&key(e.family)===`${n[1]} CAMO`&&Number(e.number)===Number(n[2]))));}c.lastSeen=c.lastSeen||new Date().toISOString();p.weapons[k]=c;broadcastProgress(p);return{ok:true};}
 function stopDetector(){const p=detectorProcess;detectorProcess=null;if(p){try{if(process.platform==='win32'&&p.pid)execFile('taskkill',['/PID',String(p.pid),'/T','/F'],{windowsHide:true},()=>{});else p.kill('SIGTERM');}catch(_){try{p.kill();}catch(__){}}}hideWatchBadge();mainWindow?.webContents.send('detector-state',{running:false});}
 function startDetector(){
@@ -164,6 +194,8 @@ app.whenReady().then(()=>{
   ipcMain.handle('close-capture-setup',()=>{closeCaptureSetup();return{ok:true};});
   ipcMain.handle('reset-capture-zones',()=>{const s=getSettings();s.captureZones=DEFAULT_ZONES.map(z=>({...z}));store.set('settings',s);closeCaptureSetup();return{ok:true,zones:s.captureZones};});
   ipcMain.handle('start-detector',()=>({ok:startDetector()}));ipcMain.handle('stop-detector',()=>{stopDetector();return{ok:true};});ipcMain.handle('set-camo-status',(_,w,c,v)=>setCamoStatus(w,c,v));
+  ipcMain.handle('assign-pending',(_,id,weapon,camo)=>assignPending(id,weapon,camo));
+  ipcMain.handle('dismiss-pending',(_,id)=>dismissPending(id));
   ipcMain.handle('clear-progress',()=>{const b={weapons:{},events:[]};broadcastProgress(b);return{ok:true};});ipcMain.handle('test-unlock',(_,e)=>{saveUnlock(e);return{ok:true};});
   ipcMain.handle('check-for-updates',async()=>{if(!app.isPackaged)return{ok:false,update:updateState};try{await autoUpdater.checkForUpdates();return{ok:true,update:updateState};}catch(e){setUpdateState({status:'error',message:e.message});return{ok:false,update:updateState};}});
   ipcMain.handle('download-update',async()=>{try{await autoUpdater.downloadUpdate();return{ok:true};}catch(e){setUpdateState({status:'error',message:e.message});return{ok:false};}});
