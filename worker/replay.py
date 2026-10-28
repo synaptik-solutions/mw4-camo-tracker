@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import math
+import re
 import os
 from pathlib import Path
 import statistics
@@ -22,7 +23,13 @@ def load_recognizer():
 
 def event_key(event):
     from recognition_session import compact
+    from camo_catalog import CATALOG
     camo = event.get('camo') or f"{event.get('family','')} {event.get('number','')}"
+    weapon = next((name for name in CATALOG if compact(name)==compact(event.get('weapon'))),None)
+    numbered = re.fullmatch(r'(SPECIAL|COMPLETIONIST)CAMO([1-3])',compact(camo))
+    if weapon and numbered:
+        offset = 8 if numbered.group(1)=='SPECIAL' else 11
+        camo = CATALOG[weapon][offset+int(numbered.group(2))-1]
     return compact(event.get('weapon')),compact(camo)
 
 
