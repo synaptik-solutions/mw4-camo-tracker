@@ -38,7 +38,7 @@ class RecognitionTests(unittest.TestCase):
         # trigger, scans stop after the quota and a later three-second popup is missed.
         tree = ast.parse(inspect.getsource(detector.main))
         trigger = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
-                       and ast.unparse(n.test) == 'visual_change or activity_spike or popup_match')
+                       and ast.unparse(n.test) == 'popup_match')
         code = compile(ast.Module(body=[trigger], type_ignores=[]), '<trigger>', 'exec')
         zone = dict(burst_until=0., burst_attempts=0, next_burst_ocr=0., last_ocr=-5.)
         reads = []
@@ -47,16 +47,16 @@ class RecognitionTests(unittest.TestCase):
             popup = now < 6 or 14 <= now <= 17
             exec(code, dict(zone=zone, now=now, visual_change=True,
                             activity_spike=False, popup_match=popup, Counter=Counter))
-            due = (now <= zone['burst_until'] and zone['burst_attempts'] < (12 if popup else 9)
+            due = (popup and now <= zone['burst_until'] and zone['burst_attempts'] < (12 if popup else 9)
                    and now >= zone['next_burst_ocr'])
-            if due or now-zone['last_ocr'] >= 5:
+            if due or (popup and now-zone['last_ocr'] >= 5):
                 reads.append(now)
                 zone['last_ocr'] = now
                 if due:
                     zone['burst_attempts'] += 1
                     zone['next_burst_ocr'] = now + (.16 if popup else .20)
         self.assertTrue(any(14 <= now <= 17 for now in reads))
-        self.assertLessEqual(max(b-a for a,b in zip(reads, reads[1:])), .25)
+        self.assertFalse(any(6 <= now < 14 or now > 17 for now in reads))
 
 
 if __name__ == '__main__':

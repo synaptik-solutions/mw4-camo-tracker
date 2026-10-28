@@ -8,6 +8,7 @@ from __future__ import annotations
 import difflib
 
 import detector_entry as entry
+from popup_signature import find_popup_header
 
 _POPUP_MATCH_GATE = 0.42
 _COMPLETIONIST_GATE = 0.50
@@ -61,11 +62,12 @@ def _safer_fuzzy_weapon(lines):
 def _guarded_match_frame(bgr):
     zone = _zone_name()
     try:
-        score = float(entry.core.popup_layout_score(bgr))
+        header = find_popup_header(bgr)
+        score = float(header[0]) if header else 0.0
     except Exception:
         score = 0.0
     _popup_scores[zone] = score
-    if score < _POPUP_MATCH_GATE:
+    if score < 0.65:
         return None
     return _original_match_frame(bgr)
 
@@ -104,3 +106,4 @@ entry.core.fuzzy_weapon = _safer_fuzzy_weapon
 entry.matcher.match_frame = _guarded_match_frame
 entry.core.parse_candidate = _guarded_parse_candidate
 entry.core.emit_candidate = _guarded_emit_candidate
+
