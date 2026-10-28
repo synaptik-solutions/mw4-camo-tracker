@@ -7,6 +7,8 @@ const {canonicalUnlock}=require('../src/unlockPolicy');
 const {weapons}=require('../src/camoCatalog');
 
 async function main(){
+ const {isCurrent,content}=require('../scripts/export-camo-catalog.cjs');
+ assert(isCurrent(content));assert(isCurrent(content.replace(/\n/g,'\r\n')));assert(!isCurrent(content+'INVALID')); 
  const child=()=>Object.assign(new EventEmitter(),{stdout:new EventEmitter(),stderr:new EventEmitter(),pid:123});
  const children=[],killed=[],progress=[];
  const jobs=new WorkerJobs(()=>{const p=child();children.push(p);return p;},p=>killed.push(p.pid),p=>progress.push(p));
