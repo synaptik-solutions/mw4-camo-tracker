@@ -93,7 +93,7 @@ class PipelineTests(unittest.TestCase):
 
         argv = ['detector','--fps','6','--zones','[{"name":"upper-right","x":0,"y":0,"width":1,"height":1}]']
         with patch.object(sys,'argv',argv), patch.object(detector.mss,'mss',FakeCapture), \
-             patch.object(detector,'RapidOCR',return_value=object()), \
+             patch.object(detector,'create_ocr',return_value=object()), \
              patch.object(detector,'inspect_capture_frame',side_effect=inspect_frame), \
              patch.object(detector,'read_frame_variants',side_effect=read_frame), \
              patch.object(detector,'emit',side_effect=emit):

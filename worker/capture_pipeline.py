@@ -6,6 +6,7 @@ import sys
 import time
 
 import numpy as np
+from capture_health import CaptureHealth
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class PopupFrame:
     captured_at: float
     captured_utc: str
     backend: str
+    source_time: float = None
 
 
 class FrameQueue:
@@ -48,6 +50,16 @@ class FrameQueue:
             self._condition.wait_for(lambda: self._items or self.closed, timeout)
             return self._items.popitem(last=False)[1] if self._items else None
 
+    def take_best(self, zone, after, before):
+        with self._condition:
+            eligible = [(key,item) for key,item in self._items.items()
+                        if item.zone==zone and after<=item.captured_at<=before]
+            if not eligible:
+                return None
+            key,item = max(eligible,key=lambda pair:(pair[1].header[0],pair[1].captured_at))
+            del self._items[key]
+            return item
+
     def close(self):
         with self._condition:
             self.closed = True
@@ -59,7 +71,10 @@ class FrameQueue:
 
 
 class CapturePump:
-    def __init__(self, factory, inspect_frame, utc_now, fps=4., capacity=4):
+    def __init__(self, factory, inspect_frame, utc_now, fps=4., capacity=4, heartbeat=None):
+        self.heartbeat = heartbeat
+        self.health = CaptureHealth(fps)
+        self.finished = False
         self.factory = factory
         self.inspect_frame = inspect_frame
         self.utc_now = utc_now
@@ -109,6 +124,7 @@ class CapturePump:
                 while not self._configured.wait(.1):
                     if self._stop.is_set():
                         return
+                last_heartbeat = 0.
                 while not self._stop.is_set():
                     started = time.monotonic()
                     for zone in self.zones:
@@ -117,6 +133,7 @@ class CapturePump:
                         frame = np.asarray(capture.grab(zone["region"]), dtype=np.uint8)
                         now = time.monotonic()
                         header, health = self.inspect_frame(frame, zone["name"])
+                        health.update(self.health.observe(frame,zone["name"]))
                         backend = getattr(capture, "backend", "mss")
                         with self._lock:
                             self.latest[zone["name"]] = health
@@ -124,8 +141,16 @@ class CapturePump:
                             self.backend = backend
                         if header:
                             self.queue.put(PopupFrame(zone["name"], frame.copy(), header,
-                                                      now, self.utc_now(), backend))
+                                                      now, self.utc_now(), backend,
+                                                      getattr(capture,"source_time",None)))
+                    if self.heartbeat and time.monotonic()-last_heartbeat>=2:
+                        status = self.health.status(len(self.zones),len(self.queue),self.queue.dropped)
+                        self.heartbeat({'type':'capture-heartbeat',**status,'captureBackend':self.backend,
+                                        'timestamp':self.utc_now(),'zones':self.snapshot()[0]})
+                        last_heartbeat = time.monotonic()
                     self._stop.wait(max(0., self.interval - (time.monotonic() - started)))
+        except StopIteration:
+            self.finished = True
         except Exception as exc:
             self.error = exc
         finally:

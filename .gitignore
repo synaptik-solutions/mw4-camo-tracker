@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+node_modules/
+src/renderer.bundle.js
+worker-dist/
+dist/
+replay-output/

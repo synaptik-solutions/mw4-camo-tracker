@@ -1,4 +1,5 @@
 const React = require('react');
+const {ReliabilityPanel,CaptureHealthBanner}=require('./ReliabilityPanel');
 const { createRoot } = require('react-dom/client');
 const { weapons: catalogWeapons, categories, globalCamos: baseGlobalCamos, allCamosForWeapon, pending } = require('./camoCatalog');
 
@@ -27,7 +28,7 @@ function App() {
   const [category, setCategory] = React.useState('All');
   const [query, setQuery] = React.useState('');
   const [openWeapon, setOpenWeapon] = React.useState(null);
-  const [diagnostics, setDiagnostics] = React.useState({ status:null, health:null, ocr:{} });
+  const [diagnostics, setDiagnostics] = React.useState({ status:null, health:null, ocr:{}, heartbeat:null, heartbeatAt:0 });
 
   const refresh = React.useCallback(async () => setState(await window.tracker.getState()), []);
   React.useEffect(() => {
@@ -35,11 +36,12 @@ function App() {
     const onFocus = () => refresh();
     window.addEventListener('focus', onFocus);
     window.tracker.onProgress(progress => setState(s => ({...s, progress})));
-    window.tracker.onDetectorState(info => setRunning(Boolean(info?.running)));
+    window.tracker.onDetectorState(info => {setRunning(Boolean(info?.running));if(info?.running)setDiagnostics(current=>({...current,heartbeat:null,heartbeatAt:Date.now()}));});
     window.tracker.onDetectorError(msg => setError(String(msg || 'Unknown detector error')));
     window.tracker.onDetectorMessage(message => {
       if (!message?.type) return;
       setDiagnostics(current => {
+        if (message.type === 'capture-heartbeat') return {...current,heartbeat:message,heartbeatAt:Date.now()};
         if (message.type === 'status') return {...current, status:message};
         if (message.type === 'capture-health') return {...current, health:message};
         if (message.type === 'ocr-debug') return {...current, ocr:{...current.ocr, [message.zone || 'unknown']:message}};
@@ -106,12 +108,14 @@ function App() {
   return <div className="shell">
     <aside className="sidebar">
       <div className="brand"><div className="logo">M4</div><div><h1>MW4 Camo Tracker</h1><p>Automatic screen tracker</p></div></div>
-      {['dashboard','weapons','history','setup','settings'].map(x => <button key={x} onClick={()=>setTab(x)} className={'nav '+(tab===x?'active':'')}>{x[0].toUpperCase()+x.slice(1)}</button>)}
+      {['dashboard','weapons','history','reliability','setup','settings'].map(x => <button key={x} onClick={()=>setTab(x)} className={'nav '+(tab===x?'active':'')}>{x[0].toUpperCase()+x.slice(1)}</button>)}
       <div className="grow" />
       <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{selectedMonitor?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small><small>v{state.appVersion || '—'}</small></div>
     </aside>
     <main>
+      {tab==='reliability' && <ReliabilityPanel settings={state.settings} saveSettings={saveSettings} diagnostics={diagnostics} running={running}/>}
       {tab==='dashboard' && <>
+        <CaptureHealthBanner heartbeat={diagnostics.heartbeat} receivedAt={diagnostics.heartbeatAt} running={running}/>
         <header><div><span className="eyebrow">LIVE TRACKING</span><h2>Dashboard</h2><p>Read-only screen capture. No game memory reading and no gameplay automation.</p></div><div className="buttons"><button className="ghost" onClick={()=>window.tracker.stopDetector()}>Stop</button><button className="primary" onClick={startWatching}>Start watching</button></div></header>
         {error && <div className="error">{error}</div>}
         <div className="cards">

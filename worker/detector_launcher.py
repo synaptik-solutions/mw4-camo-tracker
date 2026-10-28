@@ -14,6 +14,16 @@ from windows_dpi import enable_per_monitor_dpi_awareness
 
 enable_per_monitor_dpi_awareness()
 
+if '--self-test-ocr' in sys.argv:
+    from ocr_runtime import self_test
+    print(json.dumps({'type':'job-result','result':self_test()}),flush=True)
+    raise SystemExit(0)
+
+if '--replay' in sys.argv:
+    from replay import main as replay_main
+    replay_main(sys.argv[1:])
+    raise SystemExit(0)
+
 
 def _set_arg(argv, name, value):
     if name in argv:
@@ -68,6 +78,8 @@ def _normalize_capture_target(argv):
         _set_arg(argv, "--monitor", 0)
 
 
+if '--scan-menu' in sys.argv:
+    os.environ['MW4_REFERENCE_OFFLINE'] = '1'
 _normalize_capture_target(sys.argv)
 
 # Runtime policies are loaded before detector_entry creates capture/reference objects.
@@ -81,9 +93,14 @@ import recognition_policy  # noqa: E402,F401
 
 if __name__ == "__main__":
     try:
-        app.core.main()
+        if '--scan-menu' in sys.argv:
+            from menu_reconcile import main as menu_main
+            menu_main(sys.argv[1:])
+        else:
+            app.core.main()
     except KeyboardInterrupt:
         pass
     except Exception as exc:
         app.core.emit({"type": "error", "message": str(exc)})
         raise
+

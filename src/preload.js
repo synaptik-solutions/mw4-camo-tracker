@@ -27,6 +27,14 @@ contextBridge.exposeInMainWorld('tracker', {
   saveCaptureZones: (zones) => ipcRenderer.invoke('save-capture-zones', zones),
   closeCaptureSetup: () => ipcRenderer.invoke('close-capture-setup'),
   resetCaptureZones: () => ipcRenderer.invoke('reset-capture-zones'),
+  getReliabilityState: () => ipcRenderer.invoke('get-reliability-state'),
+  replayRecording: (expected=[]) => ipcRenderer.invoke('replay-recording',expected),
+  openReplayReport: () => ipcRenderer.invoke('open-replay-report'),
+  scanCamoMenu: weapon => ipcRenderer.invoke('scan-camo-menu',weapon),
+  applyMenuReconciliation: (id,indices) => ipcRenderer.invoke('apply-menu-reconciliation',id,indices),
+  cancelAnalysis: () => ipcRenderer.invoke('cancel-analysis'),
+  openDiagnostics: () => ipcRenderer.invoke('open-diagnostics'),
+  onReliabilityProgress: callback => {const listener=(_,data)=>callback(data);ipcRenderer.on('reliability-progress',listener);return()=>ipcRenderer.removeListener('reliability-progress',listener);},
   clearProgress: () => ipcRenderer.invoke('clear-progress'),
   setCamoStatus: (weapon, camo, complete) => ipcRenderer.invoke('set-camo-status', weapon, camo, complete),
   testUnlock: (event) => ipcRenderer.invoke('test-unlock', event),
@@ -48,3 +56,4 @@ contextBridge.exposeInMainWorld('tracker', {
   onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, data) => callback(data)),
   onOverlayEvent: (callback) => ipcRenderer.on('overlay-event', (_, data) => callback(data))
 });
+

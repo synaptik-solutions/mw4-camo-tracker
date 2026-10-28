@@ -4,12 +4,16 @@ import json
 import re
 import sys
 import time
+import os
+import threading
 from datetime import datetime, timezone
 
 import cv2
 import mss
 import numpy as np
-from rapidocr_onnxruntime import RapidOCR
+from ocr_runtime import create_ocr
+from recognition_session import RecognitionSession
+from diagnostic_store import DiagnosticStore
 
 from popup_signature import find_popup_header, popup_card_bounds
 from capture_pipeline import CapturePump
@@ -29,8 +33,11 @@ KNOWN_WEAPONS = [
 ]
 
 
+_emit_lock = threading.RLock()
+
 def emit(payload):
-    print(json.dumps(payload, ensure_ascii=True), flush=True)
+    with _emit_lock:
+        print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def utc_now():
@@ -343,6 +350,7 @@ def emit_candidate(candidate, confidence, zone_name):
         "confidence": round(confidence, 3),
         "zone": zone_name,
         "timestamp": candidate.get("capturedAt") or utc_now(),
+        "sourceTime": candidate.get("sourceTime"),
     }
     emit(payload)
     return (payload.get("weapon"), payload.get("family"), payload.get("number"), payload.get("camo"))
@@ -367,16 +375,17 @@ def main():
     except Exception:
         pass
 
-    ocr = RapidOCR(det_use_dilation=True, use_cls=False,
-                   intra_op_num_threads=1, inter_op_num_threads=1)
-    recent_events = {}
+    ocr = create_ocr()
+    diagnostic_store = DiagnosticStore(os.environ.get('MW4_DIAGNOSTICS_DIR'))
+    session = RecognitionSession(ocr,read_frame_variants,parse_candidate,prepare_frame,
+                                 emit,emit_candidate,non_camo_banner,diagnostic_store)
     last_health = 0.0
     try:
         zone_specs = sanitize_zones(json.loads(args.zones)) if args.zones else DEFAULT_ZONES
     except Exception:
         zone_specs = DEFAULT_ZONES
 
-    with CapturePump(mss.mss, inspect_capture_frame, utc_now, fps) as sct:
+    with CapturePump(mss.mss, inspect_capture_frame, utc_now, fps, heartbeat=emit) as sct:
         if 1 <= args.monitor < len(sct.monitors):
             monitor = dict(sct.monitors[args.monitor])
             monitor_source = f"mss-{args.monitor}"
@@ -414,31 +423,13 @@ def main():
             if item is not None and now - item.captured_at <= 15.:
                 zone = by_name[item.zone]
                 bgr = np.asarray(item.frame, dtype=np.uint8)[:, :, :3]
-                prepare_frame(bgr, item.zone, item.header[0], item.backend)
-                ocr_started = time.monotonic()
-                lines, confidence = read_frame_variants(ocr, bgr, aggressive=True)
-                # Every candidate comes from one captured card; do not combine separate
-                # banners' weapon names, camo numbers or text across time.
-                candidate = parse_candidate(lines)
-                finished = time.monotonic()
-                zone["last_ocr_text"] = " | ".join(lines)
-                zone["last_ocr_confidence"] = confidence
-                zone["ocr_duration_ms"] = round((finished - ocr_started) * 1000)
-                zone["capture_age_ms"] = round((finished - item.captured_at) * 1000)
-                emit({"type": "ocr-debug", "zone": item.zone,
-                      "rawText": zone["last_ocr_text"], "confidence": round(confidence, 3),
-                      "popupScore": round(item.header[0], 3), "popupMatch": True,
-                      "ocrDurationMs": zone["ocr_duration_ms"],
-                      "captureAgeMs": zone["capture_age_ms"], "timestamp": item.captured_utc})
-                if candidate and confidence >= .45:
-                    candidate["capturedAt"] = item.captured_utc
-                    event_key = (candidate.get("weapon"), candidate.get("family"),
-                                 candidate.get("number"), candidate.get("camo"))
-                    recent_events = {key: at for key, at in recent_events.items() if finished - at < 60.}
-                    if event_key not in recent_events:
-                        saved = emit_candidate(candidate, confidence, item.zone)
-                        if saved:
-                            recent_events[event_key] = finished
+                result = session.process(item,sct.queue)
+                zone["last_ocr_text"] = result['rawText']
+                zone["last_ocr_confidence"] = result['confidence']
+                zone["ocr_duration_ms"] = result['ocrDurationMs']
+                zone["capture_age_ms"] = result['captureAgeMs']
+            if sct.finished and not len(sct.queue):
+                break
 
             now = time.monotonic()
             if now - last_health >= 2.:
@@ -455,6 +446,8 @@ def main():
                       "settingsResolution": {"width": reference_width, "height": reference_height},
                       "zones": health, "capturedFrames": count, "pendingFrames": len(sct.queue),
                       "droppedFrames": sct.queue.dropped, "captureBackend": backend,
+                      "retryRecoveries":session.recovered,"uncertainReads":session.failures,
+                      "diagnosticError":diagnostic_store.last_error,
                       "timestamp": utc_now()})
                 last_health = now
 

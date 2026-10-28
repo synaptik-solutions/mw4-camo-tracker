@@ -18,22 +18,39 @@
   "devDependencies": {
     "electron": "31.7.7",
     "electron-builder": "24.13.3",
-    "esbuild": "0.24.0"
+    "esbuild": "0.24.0",
+    "jsdom": "26.1.0"
   },
   "build": {
     "appId": "com.synaptik.mw4camotracker",
     "productName": "MW4 Camo Tracker",
     "artifactName": "MW4-Camo-Tracker-Setup-${version}.${ext}",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "package.json"],
-    "extraResources": [{ "from": "worker-dist/detector.exe", "to": "worker/detector.exe" }],
-    "publish": [{
-      "provider": "github",
-      "owner": "synaptik-solutions",
-      "repo": "mw4-camo-tracker",
-      "releaseType": "release"
-    }],
-    "win": { "target": ["nsis"] },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "worker-dist/detector.exe",
+        "to": "worker/detector.exe"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "synaptik-solutions",
+        "repo": "mw4-camo-tracker",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
