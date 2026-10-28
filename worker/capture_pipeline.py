@@ -7,6 +7,13 @@ import time
 
 import numpy as np
 
+from popup_signature import popup_card_bounds
+
+# Native capture runs independently of the legacy scan-rate setting and slow OCR.
+MIN_CAPTURE_FPS = 10.
+MAX_PENDING_FRAMES = 128
+MAX_PENDING_BYTES = 64 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class PopupFrame:
@@ -19,34 +26,46 @@ class PopupFrame:
 
 
 class FrameQueue:
-    def __init__(self, capacity=4):
-        self.capacity = capacity
+    def __init__(self, capacity=MAX_PENDING_FRAMES, max_bytes=MAX_PENDING_BYTES):
+        self.capacity = max(1, int(capacity))
+        self.max_bytes = max(1, int(max_bytes))
+        self.pending_bytes = 0
         self._items = OrderedDict()
         self._condition = threading.Condition()
         self.closed = False
         self.dropped = 0
 
     def put(self, item):
-        # Coalesce identical snapshots within a short slot; all storage stays bounded.
-        # Include pixel identity: unrelated banners can arrive in the same slot.
-        # Never overwrite one with another merely because they share a screen region.
+        # Coalesce only byte-identical cards awaiting OCR. Moving backgrounds and new
+        # banners remain separate; time buckets must never merge unrelated unlocks.
         identity = hash(item.frame.tobytes()) if hasattr(item.frame, "tobytes") else item.frame
-        key = (item.zone, int(item.captured_at / .75), identity)
+        key = (item.zone, identity)
+        size = getattr(item.frame, "nbytes", 0)
         with self._condition:
             if self.closed:
                 return
             old = self._items.get(key)
-            if old is None or item.header[0] > old.header[0]:
-                self._items[key] = item
-            if len(self._items) > self.capacity:
-                self._items.popitem(last=False)
+            if old is not None:
+                return
+            if size > self.max_bytes:
+                self.dropped += 1
+                return
+            self._items[key] = item
+            self.pending_bytes += size
+            while len(self._items) > self.capacity or self.pending_bytes > self.max_bytes:
+                removed = self._items.popitem(last=False)[1]
+                self.pending_bytes -= getattr(removed.frame, "nbytes", 0)
                 self.dropped += 1
             self._condition.notify()
 
     def get(self, timeout=.25):
         with self._condition:
             self._condition.wait_for(lambda: self._items or self.closed, timeout)
-            return self._items.popitem(last=False)[1] if self._items else None
+            if not self._items:
+                return None
+            item = self._items.popitem(last=False)[1]
+            self.pending_bytes -= getattr(item.frame, "nbytes", 0)
+            return item
 
     def close(self):
         with self._condition:
@@ -59,11 +78,11 @@ class FrameQueue:
 
 
 class CapturePump:
-    def __init__(self, factory, inspect_frame, utc_now, fps=4., capacity=4):
+    def __init__(self, factory, inspect_frame, utc_now, fps=4., capacity=MAX_PENDING_FRAMES):
         self.factory = factory
         self.inspect_frame = inspect_frame
         self.utc_now = utc_now
-        self.interval = 1. / max(1., fps)
+        self.interval = 1. / max(MIN_CAPTURE_FPS, min(float(fps), 30.))
         self.queue = FrameQueue(capacity)
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -123,7 +142,13 @@ class CapturePump:
                             self.capture_count += 1
                             self.backend = backend
                         if header:
-                            self.queue.put(PopupFrame(zone["name"], frame.copy(), header,
+                            # Retain the native-resolution card, including weapon and
+                            # title, rather than a whole high-resolution capture zone.
+                            x0, y0, x1, y1 = popup_card_bounds(frame.shape, header[1])
+                            card = frame[y0:y1, x0:x1, :3].copy()
+                            score, (x, y, w, h) = header
+                            local_header = (score, (x-x0, y-y0, w, h))
+                            self.queue.put(PopupFrame(zone["name"], card, local_header,
                                                       now, self.utc_now(), backend))
                     self._stop.wait(max(0., self.interval - (time.monotonic() - started)))
         except Exception as exc:

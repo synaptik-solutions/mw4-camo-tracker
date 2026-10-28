@@ -359,8 +359,8 @@ def main():
     p.add_argument("--zones", type=str, default="")
     args = p.parse_args()
 
-    # UI supports 2/4/6 checks per second. 4 remains the recommended default; 6 is an
-    # opt-in faster scan mode and stays below the native capture backend's ~10 Hz request.
+    # Keep legacy UI settings compatible. CapturePump takes snapshots at >=10 Hz;
+    # OCR consumes its saved cards independently of that capture cadence.
     fps = min(max(args.fps, 1.0), 6.0)
     try:
         cv2.setNumThreads(1)
@@ -403,7 +403,7 @@ def main():
                 "capture_age_ms": 0.,
             })
 
-        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": False, "popupHeaderTrigger": True, "asyncCapture": True, "maxPendingFrames": sct.queue.capacity})
+        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": False, "popupHeaderTrigger": True, "asyncCapture": True, "maxPendingFrames": sct.queue.capacity, "captureFps": round(1. / sct.interval, 2), "maxPendingBytes": sct.queue.max_bytes})
 
         sct.configure(zones)
         by_name = {zone["name"]: zone for zone in zones}
@@ -411,7 +411,9 @@ def main():
             sct.check_error()
             item = sct.queue.get(timeout=.25)
             now = time.monotonic()
-            if item is not None and now - item.captured_at <= 15.:
+            # Saved popup cards remain readable after the on-screen notification has
+            # gone. Slow OCR must not silently expire an already-captured unlock.
+            if item is not None:
                 zone = by_name[item.zone]
                 bgr = np.asarray(item.frame, dtype=np.uint8)[:, :, :3]
                 prepare_frame(bgr, item.zone, item.header[0], item.backend)
@@ -454,7 +456,8 @@ def main():
                 emit({"type": "capture-health", "monitor": args.monitor,
                       "settingsResolution": {"width": reference_width, "height": reference_height},
                       "zones": health, "capturedFrames": count, "pendingFrames": len(sct.queue),
-                      "droppedFrames": sct.queue.dropped, "captureBackend": backend,
+                      "droppedFrames": sct.queue.dropped, "pendingBytes": sct.queue.pending_bytes,
+                      "captureFps": round(1. / sct.interval, 2), "captureBackend": backend,
                       "timestamp": utc_now()})
                 last_health = now
 
