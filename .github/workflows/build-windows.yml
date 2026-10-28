@@ -15,6 +15,8 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      MW4_REFERENCE_OFFLINE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,19 +50,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r worker/requirements.txt pyinstaller
 
-      - name: Validate source syntax
+      - name: Validate source and run reliability tests
         shell: pwsh
         run: |
+          node scripts/export-camo-catalog.cjs --check
+          if ($LASTEXITCODE -ne 0) { throw "Worker camo catalog is stale" }
           node --check src/bootstrap.js
+          if ($LASTEXITCODE -ne 0) { throw "Bootstrap syntax failed" }
           node --check src/main.js
+          if ($LASTEXITCODE -ne 0) { throw "Main-process syntax failed" }
           node --check src/preload.js
-          python -m py_compile worker/windows_dpi.py worker/capture_backend.py worker/capture_perf.py worker/monitor_order_policy.py worker/reference_policy.py worker/window_capture_policy.py worker/recognition_policy.py worker/detector.py worker/detector_entry.py worker/detector_launcher.py worker/camo_reference.py
-          python -c "import sys; sys.path.insert(0, 'worker'); import windows_dpi, capture_backend, capture_perf, monitor_order_policy, camo_reference, reference_policy, window_capture_policy, detector, detector_entry, recognition_policy; print('worker imports OK')"
-
-      - name: Test detector recognition regressions
-        run: |
+          if ($LASTEXITCODE -ne 0) { throw "Preload syntax failed" }
+          python -m compileall -q worker
+          if ($LASTEXITCODE -ne 0) { throw "Worker compilation failed" }
           python -m unittest discover -s worker/tests -v
+          if ($LASTEXITCODE -ne 0) { throw "Worker reliability tests failed" }
           node tests/unlockPolicy.test.js
+          if ($LASTEXITCODE -ne 0) { throw "Unlock catalog tests failed" }
+          node tests/reliability.test.js
+          if ($LASTEXITCODE -ne 0) { throw "App reliability tests failed" }
 
       - name: Build detector exe
         run: |
@@ -71,9 +79,14 @@ jobs:
         run: |
           & .\worker-dist\detector.exe --help
           if ($LASTEXITCODE -ne 0) { throw "Packaged detector failed smoke test with exit code $LASTEXITCODE" }
+          & .\worker-dist\detector.exe --self-test-ocr
+          if ($LASTEXITCODE -ne 0) { throw "Packaged OCR model test failed" }
 
       - name: Install app dependencies
         run: npm install
+
+      - name: Test reliability controls
+        run: node tests/reliabilityUi.test.cjs
 
       - name: Build Windows installer
         env:

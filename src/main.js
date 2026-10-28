@@ -1,20 +1,41 @@
-const { app, BrowserWindow, ipcMain, screen, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, desktopCapturer, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFile } = require('child_process');
 const Store = require('electron-store');
 const { autoUpdater } = require('electron-updater');
 const { weapons: camoWeapons } = require('./camoCatalog');
-const { isSupportedUnlock } = require('./unlockPolicy');
+const { isSupportedUnlock, canonicalUnlock } = require('./unlockPolicy');
+const {WorkerJobs}=require('./reliabilityJobs');
+const {validateExpected,selectedReconciliation}=require('./reconciliationPolicy');
+const crypto=require('node:crypto');
 
 const DEFAULT_ZONES = [
   { name:'upper-right', x:0.58, y:0.05, width:0.40, height:0.40 },
   { name:'center', x:0.27, y:0.25, width:0.46, height:0.50 },
   { name:'weapon-reference', x:0.52, y:0.62, width:0.44, height:0.22 }
 ];
-const store = new Store({ defaults: { settings: { monitorIndex:0, captureSourceType:'display', captureSourceName:'', scanFps:4, overlay:true, autoStart:true, captureZones:DEFAULT_ZONES }, progress:{ weapons:{}, events:[] } } });
+const store = new Store({ defaults: { settings: { monitorIndex:0, captureSourceType:'display', captureSourceName:'', scanFps:4, overlay:true, autoStart:true, captureZones:DEFAULT_ZONES, collectDiagnostics:true }, progress:{ weapons:{}, events:[] } } });
 let mainWindow, overlayWindow, watchBadgeWindow, zoneOverlayWindow, detectorProcess, lastOverlayTimer;
 let quitting=false;
+let analysisBusy=false,resumeAfterAnalysis=false,analysisGeneration=0,lastReplayReport=null,lastReplaySummary=null,menuScan=null,analysisMessage='',lastAnalysisError='',analysisDelayCancel=null;
+function terminateWorker(child){try{if(process.platform==='win32'&&child.pid)execFile('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true},()=>{});else child.kill('SIGTERM');}catch(_){try{child.kill();}catch(__){}}}
+function analysisProgress(p){if(p.message!==undefined)analysisMessage=p.message;mainWindow?.webContents.send('reliability-progress',p);}
+const analysisJobs=new WorkerJobs(spawn,terminateWorker,analysisProgress);
+function diagnosticsDirectory(){return path.join(app.getPath('userData'),'diagnostics');}
+function cancelAnalysis(){analysisGeneration++;if(analysisDelayCancel)analysisDelayCancel();analysisJobs.cancelAll();}
+async function withAnalysis(action){
+ if(analysisBusy)return{ok:false,error:'Another analysis is already running.'};analysisBusy=true;resumeAfterAnalysis=Boolean(detectorProcess);stopDetector();const generation=++analysisGeneration;
+ lastAnalysisError='';analysisProgress({busy:true,message:'Starting analysis…'});
+ try{return{ok:true,...await action(generation)};}catch(e){lastAnalysisError=e.message;return{ok:false,error:e.message};}
+ finally{analysisBusy=false;analysisProgress({busy:false,message:''});if(resumeAfterAnalysis&&!quitting)startDetector();}
+}
+function captureJobArguments(){
+ const s=getSettings(),d=getMonitors()[s.monitorIndex]||getMonitors()[0];if(!d)throw new Error('No capture display found.');const env={...process.env,MW4_REFERENCE_OFFLINE:'1'};
+ if(s.captureSourceType==='window'&&s.captureSourceName)env.MW4_CAPTURE_WINDOW=s.captureSourceName;else delete env.MW4_CAPTURE_WINDOW;
+ return{env,args:['--monitor',String(env.MW4_CAPTURE_WINDOW?1:d.index+1),'--left',String(d.bounds.x),'--top',String(d.bounds.y),'--width',String(d.bounds.width),'--height',String(d.bounds.height),'--fps',String(s.scanFps||4),'--zones',JSON.stringify(s.captureZones)]};
+}
+
 let updateState={status:'idle',version:app.getVersion(),percent:0,message:''};
 autoUpdater.autoDownload=false;
 autoUpdater.autoInstallOnAppQuit=true;
@@ -77,7 +98,7 @@ const weaponAliases=new Map();
 for(const item of camoWeapons) for(const alias of [item.name,...(item.aliases||[])]) weaponAliases.set(key(alias),key(item.name));
 function canonicalWeaponName(v){const r=key(v||'UNKNOWN');return weaponAliases.get(r)||r;}
 
-function destroyAuxWindows(){clearTimeout(lastOverlayTimer);lastOverlayTimer=null;for(const w of [overlayWindow,watchBadgeWindow,zoneOverlayWindow]) if(w&&!w.isDestroyed()) w.destroy();overlayWindow=watchBadgeWindow=zoneOverlayWindow=null;}
+function destroyAuxWindows(){cancelAnalysis();clearTimeout(lastOverlayTimer);lastOverlayTimer=null;for(const w of [overlayWindow,watchBadgeWindow,zoneOverlayWindow]) if(w&&!w.isDestroyed()) w.destroy();overlayWindow=watchBadgeWindow=zoneOverlayWindow=null;}
 function createMainWindow(){
   mainWindow=new BrowserWindow({width:1200,height:780,minWidth:980,minHeight:650,backgroundColor:'#0b1018',title:'MW4 Camo Tracker',webPreferences:{preload:path.join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false}});
   mainWindow.loadFile(path.join(__dirname,'index.html'));
@@ -138,14 +159,15 @@ async function openCaptureSetup(){
 function normalizeEvent(e){return{type:e.type||'unlock',weapon:canonicalWeaponName(e.weapon),family:e.family?key(e.family):null,number:Number.isInteger(e.number)?e.number:null,camo:e.camo?key(e.camo):null,rawText:e.rawText||'',confidence:typeof e.confidence==='number'?e.confidence:null,timestamp:e.timestamp||new Date().toISOString()};}
 function getWeaponProgress(p,w){const k=canonicalWeaponName(w),c=p.weapons[k]||{unlocks:[],lastSeen:null};c.unlocks=Array.isArray(c.unlocks)?c.unlocks.map(key):[];return{key:k,current:c};}
 function broadcastProgress(p){store.set('progress',p);mainWindow?.webContents.send('progress-updated',p);}
-function saveUnlock(raw){const e=normalizeEvent(raw);if(!e.weapon||e.weapon==='UNKNOWN'){mainWindow?.webContents.send('detector-error','Camo popup detected, but its weapon could not be read.');return false;}if(!isSupportedUnlock(e))return false;const p=store.get('progress'),{key:k,current:w}=getWeaponProgress(p,e.weapon);if(e.family&&Number.isInteger(e.number)&&e.number>0){const f=e.family.includes('MILITARY')?'MILITARY CAMO':e.family;if(f==='MILITARY CAMO'){for(let n=1;n<=e.number;n++){const t=`MILITARY CAMO ${n}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else{const t=`${f} ${e.number}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else if(e.camo&&!w.unlocks.includes(e.camo))w.unlocks.push(e.camo);w.lastSeen=e.timestamp;p.weapons[k]=w;p.events.unshift({...e,weapon:k});p.events=p.events.slice(0,300);broadcastProgress(p);mainWindow?.webContents.send('detector-event',{...e,weapon:k});if(overlayWindow&&getSettings().overlay){const s=getSettings(),m=getMonitors(),d=m[s.monitorIndex]||m[0];positionOverlay(d);overlayWindow.webContents.send('overlay-event',{...e,weapon:k});overlayWindow.showInactive();clearTimeout(lastOverlayTimer);lastOverlayTimer=setTimeout(()=>{if(overlayWindow&&!overlayWindow.isDestroyed())overlayWindow.hide();},4500);}return true;}
+function saveUnlock(raw){let e=normalizeEvent(raw);if(!e.weapon||e.weapon==='UNKNOWN'){mainWindow?.webContents.send('detector-error','Camo popup detected, but its weapon could not be read.');return false;}if(!isSupportedUnlock(e))return false;e=canonicalUnlock(e);const p=store.get('progress'),{key:k,current:w}=getWeaponProgress(p,e.weapon);if(e.family&&Number.isInteger(e.number)&&e.number>0){const f=e.family.includes('MILITARY')?'MILITARY CAMO':e.family;if(f==='MILITARY CAMO'){for(let n=1;n<=e.number;n++){const t=`MILITARY CAMO ${n}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else{const t=`${f} ${e.number}`;if(!w.unlocks.includes(t))w.unlocks.push(t);}}else if(e.camo&&!w.unlocks.includes(e.camo))w.unlocks.push(e.camo);w.lastSeen=e.timestamp;p.weapons[k]=w;p.events.unshift({...e,weapon:k});p.events=p.events.slice(0,300);broadcastProgress(p);mainWindow?.webContents.send('detector-event',{...e,weapon:k});if(overlayWindow&&getSettings().overlay){const s=getSettings(),m=getMonitors(),d=m[s.monitorIndex]||m[0];positionOverlay(d);overlayWindow.webContents.send('overlay-event',{...e,weapon:k});overlayWindow.showInactive();clearTimeout(lastOverlayTimer);lastOverlayTimer=setTimeout(()=>{if(overlayWindow&&!overlayWindow.isDestroyed())overlayWindow.hide();},4500);}return true;}
 function setCamoStatus(weaponName,camoName,complete){const p=store.get('progress'),{key:k,current:c}=getWeaponProgress(p,weaponName),t=key(camoName);if(!t)return{ok:false};if(complete){const m=t.match(/^MILITARY CAMO (\d+)$/);if(m){const target=Math.max(1,Math.min(8,Number(m[1])));for(let n=1;n<=target;n++){const x=`MILITARY CAMO ${n}`;if(!c.unlocks.includes(x))c.unlocks.push(x);}}else if(!c.unlocks.includes(t))c.unlocks.push(t);}else{c.unlocks=c.unlocks.filter(x=>x!==t);const n=t.match(/^(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE) CAMO (\d+)$/);p.events=(p.events||[]).filter(e=>canonicalWeaponName(e.weapon)!==k||!(key(e.camo)===t||(n&&key(e.family)===`${n[1]} CAMO`&&Number(e.number)===Number(n[2]))));}c.lastSeen=c.lastSeen||new Date().toISOString();p.weapons[k]=c;broadcastProgress(p);return{ok:true};}
 function stopDetector(){const p=detectorProcess;detectorProcess=null;if(p){try{if(process.platform==='win32'&&p.pid)execFile('taskkill',['/PID',String(p.pid),'/T','/F'],{windowsHide:true},()=>{});else p.kill('SIGTERM');}catch(_){try{p.kill();}catch(__){}}}hideWatchBadge();mainWindow?.webContents.send('detector-state',{running:false});}
 function startDetector(){
+  if(analysisBusy)return false;
   closeCaptureSetup();stopDetector();const s=getSettings(),m=getMonitors(),d=m[s.monitorIndex]||m[0];if(!d){mainWindow?.webContents.send('detector-error','No display was found.');return false;}
   const windowMode=s.captureSourceType==='window'&&s.captureSourceName;
   const r=detectorCommand(),a=[...r.prefixArgs,'--monitor',String(windowMode?1:((d.index??s.monitorIndex??0)+1)),'--left',String(d.bounds.x),'--top',String(d.bounds.y),'--width',String(d.bounds.width),'--height',String(d.bounds.height),'--fps',String(s.scanFps||4),'--zones',JSON.stringify(s.captureZones)];
-  const env={...process.env};if(windowMode)env.MW4_CAPTURE_WINDOW=s.captureSourceName;else delete env.MW4_CAPTURE_WINDOW;
+  const env={...process.env};if(s.collectDiagnostics!==false)env.MW4_DIAGNOSTICS_DIR=diagnosticsDirectory();else delete env.MW4_DIAGNOSTICS_DIR;if(windowMode)env.MW4_CAPTURE_WINDOW=s.captureSourceName;else delete env.MW4_CAPTURE_WINDOW;
   detectorProcess=spawn(r.command,a,{windowsHide:true,env});let b='';const sp=detectorProcess;
   sp.stdout.on('data',ch=>{b+=ch.toString();let n;while((n=b.indexOf('\n'))>=0){const l=b.slice(0,n).trim();b=b.slice(n+1);if(!l)continue;try{const x=JSON.parse(l);if(x.type==='unlock')saveUnlock(x);else if(x.type==='error')mainWindow?.webContents.send('detector-error',x.message||'Detector error');else mainWindow?.webContents.send('detector-message',x);}catch(_){}}});
   sp.stderr.on('data',ch=>mainWindow?.webContents.send('detector-log',ch.toString()));
@@ -157,14 +179,54 @@ function startDetector(){
 app.whenReady().then(()=>{
   createMainWindow();createOverlayWindow();configureUpdater();
   ipcMain.handle('get-state',()=>({settings:getSettings(),progress:store.get('progress'),monitors:getMonitors(),appVersion:app.getVersion(),update:updateState}));
-  ipcMain.handle('save-settings',(_,s)=>{const current=getSettings();const monitors=getMonitors();const requested=Number.isInteger(s.monitorIndex)?s.monitorIndex:current.monitorIndex;const requestedType=s.captureSourceType==='window'?'window':'display';const x={monitorIndex:requested>=0&&requested<monitors.length?requested:0,captureSourceType:requestedType,captureSourceName:requestedType==='window'?String(s.captureSourceName||current.captureSourceName||''):'',scanFps:[2,4,6].includes(Number(s.scanFps))?Number(s.scanFps):current.scanFps,overlay:Boolean(s.overlay),autoStart:Boolean(s.autoStart),captureZones:sanitizeZones(s.captureZones||current.captureZones)};store.set('settings',x);if(detectorProcess)startDetector();return{ok:true};});
+  ipcMain.handle('save-settings',(_,s)=>{const current=getSettings();const monitors=getMonitors();const requested=Number.isInteger(s.monitorIndex)?s.monitorIndex:current.monitorIndex;const requestedType=s.captureSourceType==='window'?'window':'display';const x={monitorIndex:requested>=0&&requested<monitors.length?requested:0,captureSourceType:requestedType,captureSourceName:requestedType==='window'?String(s.captureSourceName||current.captureSourceName||''):'',scanFps:[2,4,6].includes(Number(s.scanFps))?Number(s.scanFps):current.scanFps,overlay:Boolean(s.overlay),autoStart:Boolean(s.autoStart),collectDiagnostics:s.collectDiagnostics!==false,captureZones:sanitizeZones(s.captureZones||current.captureZones)};store.set('settings',x);if(detectorProcess)startDetector();return{ok:true};});
   ipcMain.handle('save-capture-source',async(_,source)=>{const s=getSettings();s.captureSourceType=source?.type==='window'?'window':'display';s.captureSourceName=s.captureSourceType==='window'?String(source?.name||''):'';store.set('settings',s);if(zoneOverlayWindow&&!zoneOverlayWindow.isDestroyed()){const m=getMonitors(),d=m[s.monitorIndex]||m[0];if(d){const bounds=await setupBoundsFor(s,d);zoneOverlayWindow.setBounds({x:bounds.x??bounds.left,y:bounds.y??bounds.top,width:bounds.width,height:bounds.height});}}mainWindow?.webContents.send('capture-source-updated',{type:s.captureSourceType,name:s.captureSourceName});return{ok:true,source:{type:s.captureSourceType,name:s.captureSourceName}};});
   ipcMain.handle('open-capture-setup',async()=>({ok:await openCaptureSetup()}));
   ipcMain.handle('save-capture-zones',(_,zones)=>{const s=getSettings();s.captureZones=sanitizeZones(zones);store.set('settings',s);mainWindow?.webContents.send('capture-zones-updated',s.captureZones);return{ok:true,zones:s.captureZones};});
   ipcMain.handle('close-capture-setup',()=>{closeCaptureSetup();return{ok:true};});
   ipcMain.handle('reset-capture-zones',()=>{const s=getSettings();s.captureZones=DEFAULT_ZONES.map(z=>({...z}));store.set('settings',s);closeCaptureSetup();return{ok:true,zones:s.captureZones};});
-  ipcMain.handle('start-detector',()=>({ok:startDetector()}));ipcMain.handle('stop-detector',()=>{stopDetector();return{ok:true};});ipcMain.handle('set-camo-status',(_,w,c,v)=>setCamoStatus(w,c,v));
+  ipcMain.handle('start-detector',()=>({ok:startDetector()}));ipcMain.handle('stop-detector',()=>{resumeAfterAnalysis=false;stopDetector();return{ok:true};});ipcMain.handle('set-camo-status',(_,w,c,v)=>setCamoStatus(w,c,v));
   ipcMain.handle('clear-progress',()=>{const b={weapons:{},events:[]};broadcastProgress(b);return{ok:true};});ipcMain.handle('test-unlock',(_,e)=>{saveUnlock(e);return{ok:true};});
+  ipcMain.handle('get-reliability-state',()=>({busy:analysisBusy,message:analysisMessage,error:lastAnalysisError,scan:menuScan,report:lastReplaySummary}));
+  ipcMain.handle('open-diagnostics',async()=>{try{fs.mkdirSync(diagnosticsDirectory(),{recursive:true});const error=await shell.openPath(diagnosticsDirectory());return{ok:!error,error};}catch(e){return{ok:false,error:e.message};}});
+  ipcMain.handle('cancel-analysis',()=>{cancelAnalysis();return{ok:true};});
+  ipcMain.handle('open-replay-report',async()=>{if(!lastReplayReport)return{ok:false,error:'Run a replay first.'};const error=await shell.openPath(lastReplayReport);return{ok:!error,error};});
+  ipcMain.handle('replay-recording',async(_,expected)=>{
+    let checked;try{checked=validateExpected(expected||[]);}catch(e){return{ok:false,error:e.message};}
+    if(analysisBusy)return{ok:false,error:'Another analysis is already running.'};
+    const chosen=await dialog.showOpenDialog(mainWindow,{title:'Choose a gameplay recording',filters:[{name:'Video',extensions:['mp4','mkv','mov','avi']}],properties:['openFile']});
+    if(chosen.canceled)return{ok:false,cancelled:true};
+    return withAnalysis(async()=>{
+      const folder=path.join(app.getPath('userData'),'replays',Date.now()+'-'+crypto.randomBytes(4).toString('hex'));
+      fs.mkdirSync(folder,{recursive:true});
+      const report=path.join(folder,'report.json'),expectedPath=path.join(folder,'expected.json');
+      const r=detectorCommand(),args=[...r.prefixArgs,'--replay',chosen.filePaths[0],'--report',report,'--mode','timed','--fps',String(getSettings().scanFps||4),'--zones',JSON.stringify(getSettings().captureZones)];
+      if(getSettings().collectDiagnostics===false)args.push('--no-snapshots');
+      if(checked.length){fs.writeFileSync(expectedPath,JSON.stringify(checked));args.push('--expected',expectedPath);}
+      const env={...process.env,MW4_REFERENCE_OFFLINE:'1'};delete env.MW4_CAPTURE_WINDOW;
+      const result=await analysisJobs.run(r.command,args,{env});lastReplayReport=report;lastReplaySummary=result.result;
+      const root=path.dirname(folder),directories=fs.readdirSync(root,{withFileTypes:true}).filter(d=>d.isDirectory()&&/^\d{13}-[a-f0-9]{8}$/.test(d.name)).map(d=>path.join(root,d.name)).sort();
+      for(const old of directories.slice(0,-10))fs.rmSync(old,{recursive:true,force:true});
+      return{report:result.result};
+    });
+  });
+  ipcMain.handle('scan-camo-menu',async(_,weapon)=>{
+    if(!camoWeapons.some(w=>w.name===weapon))return{ok:false,error:'Choose a supported weapon.'};
+    return withAnalysis(async generation=>{
+      menuScan=null;
+      analysisProgress({message:'Switch to the game camo menu now. Capture starts in 3 seconds.'});
+      await new Promise(resolve=>{const timer=setTimeout(resolve,3000);analysisDelayCancel=()=>{clearTimeout(timer);resolve();};});
+      analysisDelayCancel=null;
+      if(generation!==analysisGeneration||quitting)throw new Error('Analysis cancelled.');
+      const r=detectorCommand(),target=captureJobArguments();
+      const result=await analysisJobs.run(r.command,[...r.prefixArgs,'--scan-menu','--weapon',weapon,...target.args],{env:target.env});
+      menuScan={...result.result,id:crypto.randomUUID()};return{scan:menuScan};
+    });
+  });
+  ipcMain.handle('apply-menu-reconciliation',(_,scanId,indices)=>{
+    try{const names=selectedReconciliation(menuScan,scanId,indices);for(const name of names)setCamoStatus(menuScan.weapon,name,true);menuScan=null;return{ok:true,applied:names.length};}
+    catch(e){return{ok:false,error:e.message};}
+  });
   ipcMain.handle('check-for-updates',async()=>{if(!app.isPackaged)return{ok:false,update:updateState};try{await autoUpdater.checkForUpdates();return{ok:true,update:updateState};}catch(e){setUpdateState({status:'error',message:e.message});return{ok:false,update:updateState};}});
   ipcMain.handle('download-update',async()=>{try{await autoUpdater.downloadUpdate();return{ok:true};}catch(e){setUpdateState({status:'error',message:e.message});return{ok:false};}});
   ipcMain.handle('install-update',()=>{if(updateState.status!=='ready')return{ok:false};quitting=true;stopDetector();destroyAuxWindows();setImmediate(()=>autoUpdater.quitAndInstall(false,true));return{ok:true};});

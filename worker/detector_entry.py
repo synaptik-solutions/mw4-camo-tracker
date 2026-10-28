@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import time
+import os
 
 import numpy as np
 
@@ -22,7 +23,8 @@ core.DEFAULT_ZONES = [
 ]
 
 matcher = CamoReferenceMatcher()
-matcher.start_async()
+if not os.environ.get("MW4_REFERENCE_OFFLINE"):
+    matcher.start_async()
 
 _state = {
     "matches": {},
@@ -228,7 +230,7 @@ core.read_frame_variants = _read_with_image_vote
 
 
 def _emit_candidate(candidate, confidence, zone_name):
-    payload={"type":"unlock","weapon":candidate.get("weapon") or "UNKNOWN","family":candidate.get("family") if candidate["kind"]=="family" else None,"number":candidate.get("number") if candidate["kind"]=="family" else None,"camo":candidate.get("camo") if candidate["kind"]=="named" else None,"rawText":candidate.get("rawText", ""),"confidence":round(float(confidence),3),"zone":zone_name,"timestamp":candidate.get("capturedAt") or core.utc_now(),"imageMatch":candidate.get("imageMatch"),"imageScore":round(float(candidate.get("imageScore") or 0.0),3),"imageAgreement":round(float(candidate.get("imageAgreement") or 0.0),3),"imageRecovered":bool(candidate.get("imageRecovered")),"textRecovered":bool(candidate.get("textRecovered")),"weaponAnchored":bool(candidate.get("weaponAnchored"))}
+    payload={"type":"unlock","weapon":candidate.get("weapon") or "UNKNOWN","family":candidate.get("family") if candidate["kind"]=="family" else None,"number":candidate.get("number") if candidate["kind"]=="family" else None,"camo":candidate.get("camo") if candidate["kind"]=="named" else None,"rawText":candidate.get("rawText", ""),"confidence":round(float(confidence),3),"zone":zone_name,"timestamp":candidate.get("capturedAt") or core.utc_now(),"sourceTime":candidate.get("sourceTime"),"imageMatch":candidate.get("imageMatch"),"imageScore":round(float(candidate.get("imageScore") or 0.0),3),"imageAgreement":round(float(candidate.get("imageAgreement") or 0.0),3),"imageRecovered":bool(candidate.get("imageRecovered")),"textRecovered":bool(candidate.get("textRecovered")),"weaponAnchored":bool(candidate.get("weaponAnchored"))}
     core.emit(payload)
     return (payload.get("weapon"),payload.get("family"),payload.get("number"),payload.get("camo"))
 
