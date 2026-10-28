@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('tracker', {
   resetCaptureZones: () => ipcRenderer.invoke('reset-capture-zones'),
   clearProgress: () => ipcRenderer.invoke('clear-progress'),
   setCamoStatus: (weapon, camo, complete) => ipcRenderer.invoke('set-camo-status', weapon, camo, complete),
+  assignPending: (id, weapon, camo) => ipcRenderer.invoke('assign-pending', id, weapon, camo),
+  dismissPending: (id) => ipcRenderer.invoke('dismiss-pending', id),
   testUnlock: (event) => ipcRenderer.invoke('test-unlock', event),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
