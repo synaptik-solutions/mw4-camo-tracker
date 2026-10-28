@@ -12,6 +12,8 @@ import mss
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 
+from popup_signature import find_popup_header
+
 UNLOCK_RE = re.compile(r"\b(MILITARY|SPECIAL|COMPLETIONIST|PRESTIGE)\s+CAMO\s*#?\s*(\d+)\b", re.I)
 CAMO_RE = re.compile(r"\b([A-Z][A-Z0-9' .\-]{2,30})\s+CAMO\b", re.I)
 DEFAULT_ZONES = [
@@ -381,7 +383,7 @@ def main():
                 "burst_candidates": {},
             })
 
-        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": True})
+        emit({"type": "status", "message": "detector-ready", "monitor": args.monitor, "monitorSource": monitor_source, "monitorBounds": monitor, "settingsResolution": {"width": reference_width, "height": reference_height}, "captureScale": {"x": round(scale_x, 4), "y": round(scale_y, 4)}, "zones": [{"name": z["name"], "percent": z["percent"], "region": z["region"]} for z in zones], "fps": fps, "popupLayoutTrigger": False, "popupHeaderTrigger": True})
 
         while True:
             started = time.perf_counter()
@@ -392,7 +394,8 @@ def main():
                 gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
                 fp = fingerprint(gray)
                 activity = text_activity(gray)
-                popup_score = popup_layout_score(bgr)
+                popup_header = find_popup_header(bgr)
+                popup_score = float(popup_header[0]) if popup_header else 0.0
                 zone["last_popup_score"] = popup_score
                 zone["last_mean"] = float(np.mean(gray))
                 zone["last_stddev"] = float(np.std(gray))
@@ -404,9 +407,10 @@ def main():
                 activity_spike = activity > (zone["baseline_activity"] + 0.0010)
                 visual_change = mean_delta >= 1.0
                 strong_change = mean_delta >= 2.0
-                popup_match = popup_score >= 0.58
+                popup_match = popup_header is not None
 
-                if visual_change or activity_spike or popup_match:
+                # Motion and bright HUD text alone must never schedule expensive OCR.
+                if popup_match:
                     # Gameplay motion keeps extending burst_until; rearm exhausted bursts
                     # so a later unlock cannot fall into the five-second heartbeat gap.
                     if now > zone["burst_until"] or zone["burst_attempts"] >= (12 if popup_match else 9):
@@ -417,9 +421,9 @@ def main():
                     zone["burst_until"] = max(zone["burst_until"], now + (3.0 if popup_match else 2.2))
                     zone["next_burst_ocr"] = min(zone["next_burst_ocr"] or now, now)
 
-                in_burst = now <= zone["burst_until"] and zone["burst_attempts"] < (12 if popup_match else 9)
+                in_burst = popup_match and now <= zone["burst_until"] and zone["burst_attempts"] < 12
                 burst_due = in_burst and now >= zone["next_burst_ocr"]
-                heartbeat_due = (now - zone["last_ocr"]) >= 5.0
+                heartbeat_due = popup_match and (now - zone["last_ocr"]) >= 5.0
                 if not (burst_due or heartbeat_due):
                     continue
 
@@ -448,7 +452,8 @@ def main():
                     vote_key, votes = zone["burst_votes"].most_common(1)[0]
                     candidate_obj = zone["burst_candidates"].get(vote_key)
                     strong_single = candidate_obj and candidate_obj.get("kind") == "family" and confidence >= 0.45
-                    popup_single = popup_match and candidate_obj and candidate_obj.get("kind") == "family" and confidence >= 0.28
+                    popup_single = (popup_match and candidate_obj and candidate_obj.get("weapon") not in (None, "UNKNOWN")
+                                    and confidence >= 0.45)
                     if votes >= 2 or strong_single or popup_single:
                         winner = candidate_obj
 
