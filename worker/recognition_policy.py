@@ -73,13 +73,19 @@ def _guarded_match_frame(bgr):
 
 
 def _guarded_parse_candidate(lines):
+    joined = " | ".join(entry.core.normalize_ocr_line(x) for x in lines if x and str(x).strip()).upper()
+    # Other banners use the same corner/header. Reject their explicit type labels before
+    # any fuzzy title or thumbnail recovery can turn them into a camo.
+    if entry.core.non_camo_banner(lines):
+        return None
     candidate = _original_parse(lines)
     if not candidate or not candidate.get("textRecovered"):
         return candidate
 
     zone = _zone_name()
     joined = " | ".join(entry.core.normalize_ocr_line(x) for x in lines if x and str(x).strip()).upper()
-    popup_score = float(_popup_scores.get(zone) or 0.0)
+    popup_score = max(float(_popup_scores.get(zone) or 0.),
+                      float(entry._state.get("popup_header_score") or 0.))
     image_match = entry._fresh_match(zone)
 
     # Gold/Platinum/Harmonic Break may omit the literal word CAMO, but a fuzzy heartbeat
@@ -106,4 +112,5 @@ entry.core.fuzzy_weapon = _safer_fuzzy_weapon
 entry.matcher.match_frame = _guarded_match_frame
 entry.core.parse_candidate = _guarded_parse_candidate
 entry.core.emit_candidate = _guarded_emit_candidate
+
 
