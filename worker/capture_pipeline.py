@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from dataclasses import dataclass
 import threading
+import sys
 import time
 
 import numpy as np
@@ -98,6 +99,9 @@ class CapturePump:
 
     def _run(self):
         try:
+            if sys.platform == "win32":
+                from windows_dpi import enable_per_monitor_dpi_awareness
+                enable_per_monitor_dpi_awareness()
             # MSS/Win32 resources are created, used and closed on their owning thread.
             with self.factory() as capture:
                 self.monitors = [dict(m) for m in capture.monitors]
