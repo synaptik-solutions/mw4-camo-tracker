@@ -123,40 +123,30 @@ def _scaled_region_with_name(monitor, reference_width, reference_height, scale_x
 
 core.scaled_region = _scaled_region_with_name
 
-_original_grab = capture_mss.mss.grab
-
-def _grab_with_image_match(self, region):
-    frame = _original_grab(self, region)
-    now = time.monotonic()
-    zone_name = str(_region_names.get(_region_key(region)) or "unknown").lower()
+def _prepare_frame(bgr, zone_name, header_score, backend):
+    # Recognition state belongs only to the OCR consumer. Capture never mutates it.
     _state["current_zone"] = zone_name
-    _state["capture_backend"] = getattr(self, "backend", None)
+    _state["capture_backend"] = backend
+    _state["popup_header_score"] = header_score
+    _state["matches"].pop(zone_name, None)
+    _state["match_times"].pop(zone_name, None)
 
-    if "weapon" in zone_name:
-        _state["matches"].pop(zone_name, None)
-        _state["match_times"].pop(zone_name, None)
-        return frame
 
-    last_run = float(_state["last_match_run"].get(zone_name) or 0.0)
-    if matcher.ready and now - last_run >= 0.06:
-        _state["last_match_run"][zone_name] = now
-        try:
-            bgr = np.asarray(frame, dtype=np.uint8)[:, :, :3]
-            match = matcher.match_frame(bgr)
-        except Exception:
-            match = None
-        if match:
-            _state["matches"][zone_name] = match
-            _state["match_times"][zone_name] = now
-        else:
-            _state["matches"].pop(zone_name, None)
-            _state["match_times"].pop(zone_name, None)
-    elif not matcher.ready:
-        _state["matches"].pop(zone_name, None)
-        _state["match_times"].pop(zone_name, None)
-    return frame
+core.prepare_frame = _prepare_frame
 
-capture_mss.mss.grab = _grab_with_image_match
+
+def _match_for_recovery(bgr):
+    if not matcher.ready:
+        return
+    zone_name = str(_state.get("current_zone") or "unknown").lower()
+    try:
+        match = matcher.match_frame(bgr)
+    except Exception:
+        return
+    if match:
+        _state["matches"][zone_name] = match
+        _state["match_times"][zone_name] = time.monotonic()
+
 
 _original_parse = core.parse_candidate
 
@@ -213,9 +203,6 @@ def _parse_with_image_crosscheck(lines):
                 "imageRecovered": True, "weaponAnchored": bool(anchor and weapon == anchor),
             }
 
-    if image_match and image_match["score"] >= 0.80:
-        if weapon and ("UNLOCK" in upper or "CAMO" in upper or image_match["score"] >= 0.88):
-            return {"kind":"named","weapon":weapon,"camo":image_match["name"],"rawText":joined,"imageMatch":image_match["name"],"imageScore":float(image_match["score"]),"imageAgreement":1.0,"imageRecovered":True,"weaponAnchored":bool(anchor and weapon==anchor)}
     return candidate
 
 core.parse_candidate = _parse_with_image_crosscheck
@@ -225,6 +212,10 @@ _original_read = core.read_frame_variants
 def _read_with_image_vote(ocr, bgr, aggressive=False):
     lines, confidence = _original_read(ocr, bgr, aggressive=aggressive)
     zone_name = str(_state.get("current_zone") or "unknown").lower()
+    parsed = core.parse_candidate(lines)
+    if not parsed and not core.non_camo_banner(lines):
+        # Reference matching is a recovery step, never work that delays a clear text read.
+        _match_for_recovery(bgr)
     image_match = _fresh_match(zone_name)
     if image_match and image_match["score"] >= 0.66:
         joined = " ".join(core.normalize_ocr_line(x).upper() for x in lines)
@@ -237,7 +228,7 @@ core.read_frame_variants = _read_with_image_vote
 
 
 def _emit_candidate(candidate, confidence, zone_name):
-    payload={"type":"unlock","weapon":candidate.get("weapon") or "UNKNOWN","family":candidate.get("family") if candidate["kind"]=="family" else None,"number":candidate.get("number") if candidate["kind"]=="family" else None,"camo":candidate.get("camo") if candidate["kind"]=="named" else None,"rawText":candidate.get("rawText", ""),"confidence":round(float(confidence),3),"zone":zone_name,"timestamp":core.utc_now(),"imageMatch":candidate.get("imageMatch"),"imageScore":round(float(candidate.get("imageScore") or 0.0),3),"imageAgreement":round(float(candidate.get("imageAgreement") or 0.0),3),"imageRecovered":bool(candidate.get("imageRecovered")),"textRecovered":bool(candidate.get("textRecovered")),"weaponAnchored":bool(candidate.get("weaponAnchored"))}
+    payload={"type":"unlock","weapon":candidate.get("weapon") or "UNKNOWN","family":candidate.get("family") if candidate["kind"]=="family" else None,"number":candidate.get("number") if candidate["kind"]=="family" else None,"camo":candidate.get("camo") if candidate["kind"]=="named" else None,"rawText":candidate.get("rawText", ""),"confidence":round(float(confidence),3),"zone":zone_name,"timestamp":candidate.get("capturedAt") or core.utc_now(),"imageMatch":candidate.get("imageMatch"),"imageScore":round(float(candidate.get("imageScore") or 0.0),3),"imageAgreement":round(float(candidate.get("imageAgreement") or 0.0),3),"imageRecovered":bool(candidate.get("imageRecovered")),"textRecovered":bool(candidate.get("textRecovered")),"weaponAnchored":bool(candidate.get("weaponAnchored"))}
     core.emit(payload)
     return (payload.get("weapon"),payload.get("family"),payload.get("number"),payload.get("camo"))
 
@@ -253,7 +244,7 @@ def _emit_with_image_status(payload):
             payload["weaponReferenceZone"]=True
             payload["imageReferenceReady"]=matcher.ready
             payload["imageReferenceCount"]=matcher.count
-            payload["captureBackend"]=_state.get("capture_backend")
+            payload["captureBackend"]=payload.get("captureBackend") or _state.get("capture_backend")
         elif payload.get("type")=="capture-health":
             payload=dict(payload)
             zones=[]
@@ -269,7 +260,7 @@ def _emit_with_image_status(payload):
             payload["imageReferenceCount"]=matcher.count
             payload["imageReferenceError"]=matcher.last_error
             payload["weaponAnchor"]=_fresh_weapon()
-            payload["captureBackend"]=_state.get("capture_backend")
+            payload["captureBackend"]=payload.get("captureBackend") or _state.get("capture_backend")
         elif payload.get("type")=="ocr-debug":
             payload=dict(payload)
             zone_name=str(payload.get("zone") or _state.get("current_zone") or "unknown").lower()
@@ -278,7 +269,7 @@ def _emit_with_image_status(payload):
             payload["imageScore"]=round(float(current.get("score") or 0.0),3) if current else 0.0
             payload["activeZone"]=zone_name
             payload["weaponAnchor"]=_fresh_weapon()
-            payload["captureBackend"]=_state.get("capture_backend")
+            payload["captureBackend"]=payload.get("captureBackend") or _state.get("capture_backend")
     _original_emit(payload)
 
 core.emit = _emit_with_image_status
@@ -291,3 +282,4 @@ if __name__ == "__main__":
     except Exception as exc:
         core.emit({"type":"error","message":str(exc)})
         raise
+
