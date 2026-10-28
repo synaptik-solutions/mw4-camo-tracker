@@ -58,7 +58,9 @@ jobs:
           python -c "import sys; sys.path.insert(0, 'worker'); import windows_dpi, capture_backend, capture_perf, monitor_order_policy, camo_reference, reference_policy, window_capture_policy, detector, detector_entry, recognition_policy; print('worker imports OK')"
 
       - name: Test detector recognition regressions
-        run: python -m unittest discover -s worker/tests -v
+        run: |
+          python -m unittest discover -s worker/tests -v
+          node tests/unlockPolicy.test.js
 
       - name: Build detector exe
         run: |
@@ -115,3 +117,4 @@ jobs:
 
           gh release edit $tag --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw "Release could not be published." }
+
