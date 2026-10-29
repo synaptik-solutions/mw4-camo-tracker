@@ -24,6 +24,7 @@ function ReliabilityPanel({settings,saveSettings,diagnostics,running}){
     {error&&<div className="error">{error}</div>}
     {busy&&<section className="card"><p role="status">{message||'Working…'}</p><button className="ghost" onClick={()=>window.tracker.cancelAnalysis()}>Cancel analysis</button></section>}
     <CaptureHealthBanner heartbeat={diagnostics.heartbeat} receivedAt={diagnostics.heartbeatAt} running={running}/>
+    <section className="card settings"><h3>Capture timing</h3><p>Actual scan rate: {diagnostics.heartbeat?.captureFps??'—'} / {settings.scanFps} scans per second</p><p className="muted">Last scan: {diagnostics.heartbeat?.cycleMs??'—'} ms · Capture: {diagnostics.heartbeat?.grabMs??'—'} ms · Banner checks: {diagnostics.heartbeat?.inspectMs??'—'} ms · Target time per scan: {diagnostics.heartbeat?.targetBudgetMs??'—'} ms</p></section>
     <section className="card settings"><h3>Failed-read snapshots</h3>
       <label className="toggle"><input type="checkbox" checked={settings.collectDiagnostics!==false} disabled={busy} onChange={e=>saveSettings({collectDiagnostics:e.target.checked})}/><span>Save failed popup crops and recognized text locally</span></label>
       <p className="muted">Up to 60 entries, 50 MB and 7 days. These are cropped game popups; they are not uploaded.</p>

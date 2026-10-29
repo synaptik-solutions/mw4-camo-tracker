@@ -1,5 +1,8 @@
 """Shared live/replay recognition, bounded retries, and failed-read diagnostics."""
 import time
+import re
+import difflib
+from completion_banner import is_completion_text, review_image
 from camo_catalog import CATALOG
 
 
@@ -25,6 +28,7 @@ class RecognitionSession:
         self.emit,self.emit_unlock,self.non_camo = emit,emit_unlock,non_camo
         self.diagnostics = diagnostics
         self.recent = {}
+        self.last_review = None
         self.attempts = 0
         self.failures = 0
         self.recovered = 0
@@ -39,8 +43,10 @@ class RecognitionSession:
             finished = time.monotonic()
             self.attempts += 1
             other_banner = self.non_camo(lines)
-            valid = not other_banner and supported(candidate) and confidence >= .45
-            reason = 'recognized' if valid else 'other-banner' if other_banner else 'uncertain-read'
+            completion = is_completion_text(lines)
+            valid = not completion and not other_banner and supported(candidate) and confidence >= .45
+            review = confidence >= .45 and not other_banner and completion
+            reason = 'review-required' if review else 'recognized' if valid else 'other-banner' if other_banner else 'uncertain-read'
             saved = None
             if not valid and not other_banner:
                 self.failures += 1
@@ -52,6 +58,21 @@ class RecognitionSession:
                           timestamp=item.captured_utc,popupScore=item.header[0],popupMatch=True,
                           retryAttempt=attempt,reason=reason,diagnosticId=saved,
                           sourceTime=getattr(item,'source_time',None),candidate=candidate,emitted=False)
+            if review:
+                at = item.source_time if getattr(item,'source_time',None) is not None else item.captured_at
+                review_key = ('review',compact(' '.join(lines)))
+                self.recent = {key:t for key,t in self.recent.items() if at-t<60}
+                text=compact(' '.join(lines))
+                digits=sorted(set(re.findall(r'\d+', re.sub(r'[IL](?=\d)','1',' '.join(lines).upper()))))
+                previous=self.last_review
+                duplicate=previous and 0<=at-previous[0]<4 and digits==previous[2] and difflib.SequenceMatcher(None,text,previous[1]).ratio()>=.7
+                if review_key not in self.recent and not duplicate:
+                    self.emit(dict(type='completion-review',rawText=' | '.join(lines),
+                                   confidence=round(float(confidence),3),zone=item.zone,
+                                   timestamp=item.captured_utc,sourceTime=getattr(item,'source_time',None),
+                                   image=review_image(item.frame,item.header)))
+                    self.recent[review_key] = at
+                    self.last_review = (at,text,digits)
             if valid:
                 at = item.source_time if getattr(item,'source_time',None) is not None else item.captured_at
                 self.recent = {key:t for key,t in self.recent.items() if at-t<60}
@@ -65,7 +86,7 @@ class RecognitionSession:
                         if attempt:
                             self.recovered += 1
             self.emit({'type':'ocr-debug',**{k:v for k,v in result.items() if k!='candidate'}})
-            if valid or other_banner or attempt==2 or queue is None:
+            if valid or review or other_banner or attempt==2 or queue is None:
                 return result
             next_item = queue.take_best(item.zone,item.captured_at+.001,first_time+2.5)
             if next_item is None:

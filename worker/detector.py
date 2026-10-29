@@ -260,29 +260,34 @@ def complete_candidate(lines, confidence):
 
 
 def read_frame_variants(ocr, bgr, aggressive=False):
-    header = find_popup_header(bgr)
+    from completion_banner import find_completion_header, banner_bounds, is_completion_text
+    header = find_popup_header(bgr) or find_completion_header(bgr)
     if not header:
         return [], 0.
-    bounds = popup_card_bounds(bgr.shape, header[1])
+    bounds = banner_bounds(bgr.shape, header)
     x0, y0, x1, y1 = bounds
     card = bgr[y0:y1, x0:x1]
     scale = min(3., max(1., 48. / max(1, header[1][3])))
     enlarged = cv2.resize(card, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     lines, confidence = ocr_lines(ocr, enlarged, .15)
-    if non_camo_banner(lines) or complete_candidate(lines, confidence):
+    if is_completion_text(lines) or non_camo_banner(lines) or complete_candidate(lines, confidence):
         return lines, confidence
 
     gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY)
     contrast = cv2.createCLAHE(clipLimit=2., tileGridSize=(8, 8)).apply(gray)
     more, more_conf = ocr_lines(ocr, contrast, .15)
+    if is_completion_text(more):
+        return more, more_conf
     lines = merge_lines(lines, more)
     confidence = max(confidence, more_conf)
-    if non_camo_banner(lines) or complete_candidate(lines, confidence):
+    if is_completion_text(lines) or non_camo_banner(lines) or complete_candidate(lines, confidence):
         return lines, confidence
 
     # Detection at the original zone scale sometimes reads the short gun name better.
     # Only accept boxes inside this card, never text from another banner or the HUD.
     more, more_conf = ocr_lines(ocr, bgr, .15, bounds=bounds)
+    if is_completion_text(more):
+        return more, more_conf
     return merge_lines(lines, more), max(confidence, more_conf)
 
 
@@ -291,6 +296,9 @@ def inspect_capture_frame(frame, zone_name):
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     sample = cv2.resize(gray, (96, 54), interpolation=cv2.INTER_AREA)
     header = None if "weapon" in zone_name else find_popup_header(bgr)
+    if header is None and "center" in zone_name:
+        from completion_banner import find_completion_header
+        header = find_completion_header(bgr)
     return header, {"mean": round(float(np.mean(sample)), 2),
                     "stddev": round(float(np.std(sample)), 2),
                     "activity": round(text_activity(gray), 5),

@@ -1,4 +1,5 @@
 const React = require('react');
+const {CompletionReviews}=require('./CompletionReviews');
 const {ReliabilityPanel,CaptureHealthBanner}=require('./ReliabilityPanel');
 const { createRoot } = require('react-dom/client');
 const { weapons: catalogWeapons, categories, globalCamos: baseGlobalCamos, allCamosForWeapon, pending } = require('./camoCatalog');
@@ -40,6 +41,7 @@ function App() {
     window.tracker.onDetectorError(msg => setError(String(msg || 'Unknown detector error')));
     window.tracker.onDetectorMessage(message => {
       if (!message?.type) return;
+      if (message.type==='completion-review') refresh();
       setDiagnostics(current => {
         if (message.type === 'capture-heartbeat') return {...current,heartbeat:message,heartbeatAt:Date.now()};
         if (message.type === 'status') return {...current, status:message};
@@ -113,6 +115,7 @@ function App() {
       <div className="statusBox"><div><span className={'dot '+(running?'on':'')}></span><b>{running?'Watching':'Stopped'}</b></div><small>{selectedMonitor?.label || 'Monitor 2'} · {state.settings.scanFps || 4} checks/sec</small><small>v{state.appVersion || '—'}</small></div>
     </aside>
     <main>
+      <CompletionReviews items={state.completionReviews||[]} onResolve={async(id,weapon,camo)=>{const result=await window.tracker.resolveCompletionReview(id,weapon,camo);await refresh();return result;}}/>
       {tab==='reliability' && <ReliabilityPanel settings={state.settings} saveSettings={saveSettings} diagnostics={diagnostics} running={running}/>}
       {tab==='dashboard' && <>
         <CaptureHealthBanner heartbeat={diagnostics.heartbeat} receivedAt={diagnostics.heartbeatAt} running={running}/>
