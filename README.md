@@ -47,3 +47,9 @@ Expected events use seconds in the video, for example:
 The supplied 96.97-second recording has one annotated camo unlock. Both native 720p exhaustive and clocked replays matched it with zero annotated misses and zero false unlocks. The clocked run exercised a successful retry; the first notification was produced about 2.46 seconds after its captured frame. One queued snapshot was dropped, distinct from a missed unlock. An upscaled 1080p exhaustive replay also matched the unlock without false events.
 
 Those results describe one recording on the test runtime. They do not guarantee all HUD styles, HDR settings, menu layouts, native resolutions or Windows capture configurations. Menu parsing and application scope have deterministic tests; an actual camo-menu recording was not supplied. In-game latency and menu suggestions must be checked on the user's setup.
+
+### Center completion banners
+
+The cyan **CHALLENGE COMPLETED** banner has its own visual trigger in the center capture zone. OCR must confirm the completion wording. Banners that omit the weapon/camo are saved locally in a bounded review list (20 entries), with a cropped screenshot, and shown across tracker tabs. They do not change progress until you explicitly choose a supported weapon and camo and click **Assign camo**. Use **Dismiss** for non-camo challenges. The normal overlay says **Banner captured — Needs review** when enabled. The review list survives restarts. This supports the center style observed in the supplied recording; other unseen game layouts still need validation.
+
+Reliability now reports actual scan FPS and last-cycle capture, banner-check, total, and target-budget milliseconds, to separate source latency from visual matching cost. A 6 FPS target allows 166.7 ms per scan across all zones; it does not guarantee six OCR reads per second.

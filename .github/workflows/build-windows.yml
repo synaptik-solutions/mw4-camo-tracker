@@ -86,7 +86,14 @@ jobs:
         run: npm install
 
       - name: Test reliability controls
-        run: node tests/reliabilityUi.test.cjs
+        shell: pwsh
+        run: |
+          node tests/reliabilityUi.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Reliability controls failed" }
+          node tests/completionStore.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Completion review storage failed" }
+          node tests/completionUi.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Completion review controls failed" }
 
       - name: Build Windows installer
         env:

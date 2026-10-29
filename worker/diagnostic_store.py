@@ -8,7 +8,7 @@ import time
 import uuid
 
 import cv2
-from popup_signature import popup_card_bounds
+from completion_banner import banner_bounds
 
 
 class DiagnosticStore:
@@ -39,7 +39,7 @@ class DiagnosticStore:
             stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:8]
             directory = self.root/stamp
             directory.mkdir()
-            bounds = popup_card_bounds(item.frame.shape, item.header[1])
+            bounds = banner_bounds(item.frame.shape, item.header)
             x0,y0,x1,y1 = bounds
             crop = item.frame[y0:y1,x0:x1,:3]
             ok, image = cv2.imencode('.png',crop)

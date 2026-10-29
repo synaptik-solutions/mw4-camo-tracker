@@ -102,9 +102,10 @@ def run_replay(filename, report_path, expected=None, mode='timed', fps=4., resiz
     from recognition_session import RecognitionSession
     core = load_recognizer()
     cv2.setNumThreads(1)
-    events,reads = [],[]
+    events,reads,reviews = [],[],[]
     def on_message(payload):
         if payload.get('type')=='unlock': events.append(payload)
+        if payload.get('type')=='completion-review': reviews.append(payload)
         if payload.get('type')=='ocr-debug': reads.append(payload)
     core.emit = on_message
     ocr = core.create_ocr()
@@ -156,7 +157,7 @@ def run_replay(filename, report_path, expected=None, mode='timed', fps=4., resiz
                     progress(dict(message='Checking every sampled frame',videoSeconds=round(second,1)))
     durations = [read['ocrDurationMs'] for read in reads]
     delays = [read['captureAgeMs'] for read in reads if read['reason']=='recognized']
-    report = dict(version=1,mode=mode,scanFps=fps,resize=resize,events=events,reads=reads,
+    report = dict(reviews=reviews,version=1,mode=mode,scanFps=fps,resize=resize,events=events,reads=reads,
                   elapsedSeconds=round(time.monotonic()-started,2),capturedFrames=captured,droppedFrames=dropped,
                   attempts=session.attempts,uncertainReads=session.failures,retryRecoveries=session.recovered,
                   medianReadMs=round(statistics.median(durations)) if durations else None,

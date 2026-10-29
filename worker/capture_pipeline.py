@@ -127,13 +127,18 @@ class CapturePump:
                 last_heartbeat = 0.
                 while not self._stop.is_set():
                     started = time.monotonic()
+                    grab_ms = inspect_ms = 0.
                     for zone in self.zones:
                         if self._stop.is_set():
                             break
+                        grab_started = time.monotonic()
                         frame = np.asarray(capture.grab(zone["region"]), dtype=np.uint8)
                         now = time.monotonic()
+                        grab_ms += (now - grab_started)*1000
+                        inspect_started = now
                         header, health = self.inspect_frame(frame, zone["name"])
                         health.update(self.health.observe(frame,zone["name"]))
+                        inspect_ms += (time.monotonic()-inspect_started)*1000
                         backend = getattr(capture, "backend", "mss")
                         with self._lock:
                             self.latest[zone["name"]] = health
@@ -146,7 +151,10 @@ class CapturePump:
                     if self.heartbeat and time.monotonic()-last_heartbeat>=2:
                         status = self.health.status(len(self.zones),len(self.queue),self.queue.dropped)
                         self.heartbeat({'type':'capture-heartbeat',**status,'captureBackend':self.backend,
-                                        'timestamp':self.utc_now(),'zones':self.snapshot()[0]})
+                                        'timestamp':self.utc_now(),'zones':self.snapshot()[0],
+                                        'grabMs':round(grab_ms,1),'inspectMs':round(inspect_ms,1),
+                                        'cycleMs':round((time.monotonic()-started)*1000,1),
+                                        'targetBudgetMs':round(self.interval*1000,1)})
                         last_heartbeat = time.monotonic()
                     self._stop.wait(max(0., self.interval - (time.monotonic() - started)))
         except StopIteration:

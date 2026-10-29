@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('tracker', {
+  resolveCompletionReview: (id,weapon,camo) => ipcRenderer.invoke('resolve-completion-review',id,weapon,camo),
   getState: () => ipcRenderer.invoke('get-state'),
   saveSettings: async (settings) => {
     // Capture source is owned by the dedicated OBS-style source picker. The main React
