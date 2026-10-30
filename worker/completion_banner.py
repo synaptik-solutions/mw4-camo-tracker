@@ -59,11 +59,19 @@ def banner_bounds(shape,header):
     return max(0,x-int(.15*w)),max(0,y-5*h),min(width,x+int(1.15*w)),min(height,y+4*h)
 
 
-def review_image(frame,header):
-    x0,y0,x1,y1=banner_bounds(frame.shape,header)
-    crop=frame[y0:y1,x0:x1,:3]
+def review_image(frame,header,context=None):
+    # Review uses the wider same-frame capture, never the tight OCR/diagnostic crop.
+    crop=(context if context is not None else frame)[:,:,:3]
     if crop.size==0:return None
-    if crop.shape[1]>700:
-        crop=cv2.resize(crop,(700,max(1,round(crop.shape[0]*700/crop.shape[1]))))
-    ok,data=cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,85])
-    return 'data:image/jpeg;base64,'+base64.b64encode(data).decode() if ok else None
+    scale=min(1.,1600./max(crop.shape[:2]))
+    if scale<1:
+        crop=cv2.resize(crop,None,fx=scale,fy=scale,interpolation=cv2.INTER_AREA)
+    for quality in (88,76,64):
+        ok,data=cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,quality])
+        if not ok:return None
+        if len(data)<=1000000:
+            return 'data:image/jpeg;base64,'+base64.b64encode(data).decode()
+    # Bound storage even for unusually noisy high-resolution source frames.
+    crop=cv2.resize(crop,None,fx=.7,fy=.7,interpolation=cv2.INTER_AREA)
+    ok,data=cv2.imencode('.jpg',crop,[cv2.IMWRITE_JPEG_QUALITY,76])
+    return 'data:image/jpeg;base64,'+base64.b64encode(data).decode() if ok and len(data)<=1000000 else None

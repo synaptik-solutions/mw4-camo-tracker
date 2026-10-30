@@ -18,6 +18,29 @@ class PopupFrame:
     captured_utc: str
     backend: str
     source_time: float = None
+    review_frame: object = None
+
+
+def review_capture_region(region, monitors, zone_name):
+    """Keep extra context in the same exposure without enlarging the OCR region."""
+    if 'weapon' in zone_name or not all(k in region for k in ('left','top','width','height')):
+        return dict(region)
+    x,y,w,h=(int(region[k]) for k in ('left','top','width','height'))
+    monitor=next((m for m in monitors[1:] if all(k in m for k in ('left','top','width','height'))
+                  and m['left']<=x and m['top']<=y
+                  and x+w<=m['left']+m['width'] and y+h<=m['top']+m['height']),None)
+    if monitor is None:
+        return dict(region)
+    x0=max(monitor['left'],x-round(w*.25))
+    y0=max(monitor['top'],y-round(h*.50))
+    x1=min(monitor['left']+monitor['width'],x+w+round(w*.25))
+    y1=min(monitor['top']+monitor['height'],y+h+round(h*.20))
+    return dict(left=x0,top=y0,width=x1-x0,height=y1-y0)
+
+
+def extract_detection_frame(context, region, capture_region):
+    x=int(region['left']-capture_region['left']);y=int(region['top']-capture_region['top'])
+    return context[y:y+int(region['height']),x:x+int(region['width']),:3]
 
 
 class FrameQueue:
@@ -132,7 +155,10 @@ class CapturePump:
                         if self._stop.is_set():
                             break
                         grab_started = time.monotonic()
-                        frame = np.asarray(capture.grab(zone["region"]), dtype=np.uint8)
+                        region=zone['region']
+                        context_region=review_capture_region(region,self.monitors,zone['name'])
+                        context_frame=np.asarray(capture.grab(context_region),dtype=np.uint8)
+                        frame=extract_detection_frame(context_frame,region,context_region)
                         now = time.monotonic()
                         grab_ms += (now - grab_started)*1000
                         inspect_started = now
@@ -147,7 +173,8 @@ class CapturePump:
                         if header:
                             self.queue.put(PopupFrame(zone["name"], frame.copy(), header,
                                                       now, self.utc_now(), backend,
-                                                      getattr(capture,"source_time",None)))
+                                                      getattr(capture,"source_time",None),
+                                                      context_frame.copy()))
                     if self.heartbeat and time.monotonic()-last_heartbeat>=2:
                         status = self.health.status(len(self.zones),len(self.queue),self.queue.dropped)
                         self.heartbeat({'type':'capture-heartbeat',**status,'captureBackend':self.backend,
