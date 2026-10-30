@@ -70,7 +70,7 @@ class RecognitionSession:
                     self.emit(dict(type='completion-review',rawText=' | '.join(lines),
                                    confidence=round(float(confidence),3),zone=item.zone,
                                    timestamp=item.captured_utc,sourceTime=getattr(item,'source_time',None),
-                                   image=review_image(item.frame,item.header)))
+                                   image=review_image(item.frame,item.header,getattr(item,'review_frame',None))))
                     self.recent[review_key] = at
                     self.last_review = (at,text,digits)
             if valid:

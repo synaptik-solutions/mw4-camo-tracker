@@ -168,7 +168,7 @@ function saveCompletionReview(message){
   const compact=value=>String(value).toUpperCase().replace(/[^A-Z0-9]/g,'');
   if(list.some(item=>compact(item.rawText)===compact(message.rawText)&&now-Date.parse(item.timestamp)<60000))return;
   const item={id:require('crypto').randomUUID(),rawText:message.rawText,zone:String(message.zone||''),timestamp:new Date().toISOString(),
-    image:typeof message.image==='string'&&message.image.startsWith('data:image/jpeg;base64,')&&message.image.length<250000?message.image:null};
+    image:typeof message.image==='string'&&message.image.startsWith('data:image/jpeg;base64,')&&message.image.length<1500000?message.image:null};
   store.set('completionReviews',[item,...list].slice(0,20));
   mainWindow?.webContents.send('detector-message',{type:'completion-review',...item});
   if(overlayWindow&&getSettings().overlay){

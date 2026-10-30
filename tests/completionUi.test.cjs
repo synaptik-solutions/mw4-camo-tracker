@@ -7,6 +7,17 @@ async function waitFor(fn){for(let n=0;n<150;n++){if(fn())return;await new Promi
  const w=dom.window;w.eval(output.outputFiles[0].text);await waitFor(()=>w.document.querySelector('select'));
  const buttons=()=>[...w.document.querySelectorAll('button')];const assign=()=>buttons().find(b=>b.textContent==='Assign camo');
  assert(assign().disabled);assert.equal(w.resolutions.length,0);
+ const larger=()=>buttons().find(b=>b.textContent==='View larger image');larger().click();
+ await waitFor(()=>w.document.querySelector('[role="dialog"]'));
+ assert.equal(w.resolutions.length,0);
+ buttons().find(b=>b.textContent==='Actual size').click();
+ await waitFor(()=>buttons().some(b=>b.textContent==='Fit image'));
+ w.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape'}));
+ await waitFor(()=>!w.document.querySelector('[role="dialog"]'));
+ larger().click();await waitFor(()=>w.document.querySelector('[role="dialog"]'));
+ buttons().find(b=>b.textContent==='Close image').click();
+ await waitFor(()=>!w.document.querySelector('[role="dialog"]'));
+ assert.equal(w.resolutions.length,0);
  const weapon=w.document.querySelector('[aria-label="Banner weapon"]');weapon.value='M4';weapon.dispatchEvent(new w.Event('change',{bubbles:true}));
  await waitFor(()=>!w.document.querySelector('[aria-label="Banner camo"]').disabled);
  const camo=w.document.querySelector('[aria-label="Banner camo"]');camo.value='Gold';camo.dispatchEvent(new w.Event('change',{bubbles:true}));

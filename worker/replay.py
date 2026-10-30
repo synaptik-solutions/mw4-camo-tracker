@@ -97,7 +97,7 @@ class VideoSource:
 
 
 def run_replay(filename, report_path, expected=None, mode='timed', fps=4., resize=None, zones=None, progress=None, save_snapshots=True):
-    from capture_pipeline import CapturePump,PopupFrame
+    from capture_pipeline import CapturePump,PopupFrame,review_capture_region,extract_detection_frame
     from diagnostic_store import DiagnosticStore
     from recognition_session import RecognitionSession
     core = load_recognizer()
@@ -145,12 +145,15 @@ def run_replay(filename, report_path, expected=None, mode='timed', fps=4., resiz
                 except StopIteration: break
                 for zone in selected:
                     region = zone['region']; x,y,w,h = [region[k] for k in ('left','top','width','height')]
-                    crop = frame[y:y+h,x:x+w,:3]
+                    context_region=review_capture_region(region,source.monitors,zone['name'])
+                    cx,cy,cw,ch=(context_region[k] for k in ('left','top','width','height'))
+                    context=frame[cy:cy+ch,cx:cx+cw,:3]
+                    crop=extract_detection_frame(context,region,context_region)
                     header,_ = core.inspect_capture_frame(crop,zone['name'])
                     captured += 1
                     if header:
                         item = PopupFrame(zone['name'],crop.copy(),header,time.monotonic(),core.utc_now(),
-                                          'offline-video',source.source_time)
+                                          'offline-video',source.source_time,context.copy())
                         session.process(item)
                 second += 1./fps
                 if progress and int(second*fps) % int(fps*5)==0:
