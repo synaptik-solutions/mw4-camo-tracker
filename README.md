@@ -57,3 +57,7 @@ Reliability now reports actual scan FPS and last-cycle capture, banner-check, to
 ### Larger banner review images
 
 New completion reviews retain a wider capture area above and around the detection zone, including center banner icons that sit above the OCR box. The detector still receives the original region, extracted from the same captured frame. No additional screenshot call is made. Review images preserve their aspect ratio, use the card width, and offer **View larger image**, **Actual size**, and **Fit image** controls. Close the viewer with **Close image** or Escape. Images remain local and bounded; previously saved tightly cropped images cannot recover pixels that were never captured.
+
+### Quick manual assignment
+
+Each saved banner requires an explicit weapon choice. Search gun names or categories, or click the recent-weapon shortcut; the last gun is never automatically selected for a different banner. Gold, Platinum, and Harmonic Break have direct **Assign** buttons. Search the other camos by name/requirement or expand **Other camos**. A camo click immediately assigns it to the visibly selected weapon. Captured banners remain saved for review after the match.
